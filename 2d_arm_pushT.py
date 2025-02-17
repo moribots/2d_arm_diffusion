@@ -18,9 +18,9 @@ GOAL_T_COLOR = (0, 200, 0)       # Goal T outline color
 FPS = 120
 
 # --- 3R Arm Parameters ---
-L1 = 150.0
-L2 = 150.0
-L3 = 120.0
+L1 = 200.0
+L2 = 200.0
+L3 = 160.0
 ARM_LENGTH = L1 + L2 + L3
 
 # --- Jacobian IK Parameters ---
@@ -32,11 +32,11 @@ IK_TOL = 1e-3
 EE_RADIUS = 16.0
 
 # --- Contact Mechanics Parameters (gym-pusht defaults) ---
-K_CONTACT = 10000.0    # Penalty stiffness (softer contact is achieved by adjusting this)
-M_T = 20.0             # Mass of T block
-I_MOMENT = 100.0       # Moment of inertia for rotation
+K_CONTACT = 1000.0    # Penalty stiffness (softer contact is achieved by adjusting this)
+M_T = 100.0             # Mass of T block
+I_MOMENT = 10.0       # Moment of inertia for rotation
 ANGULAR_DAMPING = 0.1
-LINEAR_DAMPING = 1.1
+LINEAR_DAMPING = 0.1
 
 # Maximum allowed penetration (to avoid huge forces)
 MAX_PENETRATION = 0.5
@@ -48,7 +48,7 @@ MAX_T_ANG_VEL = 10.0 # rad/s
 # --- Goal Settings ---
 DESIRED_T_POSE = torch.tensor([500.0, 500.0, 0.0], dtype=torch.float32)
 GOAL_POS_TOL = 5.0
-GOAL_ORIENT_TOL = 0.2
+GOAL_ORIENT_TOL = 1
 
 # --- Arm Base Position ---
 BASE_POS = torch.tensor([300.0, 300.0], dtype=torch.float32)
