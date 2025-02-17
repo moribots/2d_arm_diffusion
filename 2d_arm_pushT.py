@@ -9,8 +9,8 @@ from einops import rearrange
 import math
 
 # --- Environment Settings ---
-SCREEN_WIDTH = 600
-SCREEN_HEIGHT = 600
+SCREEN_WIDTH = 1000
+SCREEN_HEIGHT = 800
 BACKGROUND_COLOR = (255, 255, 255)
 ARM_COLOR = (50, 100, 200)
 T_COLOR = (200, 50, 50)          # Active T color
@@ -18,9 +18,9 @@ GOAL_T_COLOR = (0, 200, 0)       # Goal T outline color
 FPS = 60
 
 # --- 3R Arm Parameters ---
-L1 = 100.0
-L2 = 100.0
-L3 = 80.0
+L1 = 150.0
+L2 = 150.0
+L3 = 120.0
 ARM_LENGTH = L1 + L2 + L3
 
 # --- Jacobian IK Parameters ---
@@ -33,17 +33,20 @@ EE_RADIUS = 16.0  # doubled from 8.0
 
 # --- Contact Mechanics Parameters (gym-pusht defaults) ---
 K_CONTACT = 1000.0    # Penalty stiffness (softer contact)
-M_T = 100.0            # Mass of T block
+M_T = 20.0            # Mass of T block
 I_MOMENT = 100.0     # Moment of inertia for rotation
 ANGULAR_DAMPING = 0.1
-LINEAR_DAMPING = 1.5  # Added linear damping
+LINEAR_DAMPING = 1.1  # Added linear damping
 
 # Set a maximum allowed penetration (in pixels) to limit excessive penetration
-MAX_PENETRATION = 1.0
+MAX_PENETRATION = 5
+
+MAX_T_VEL = 100.0 # m/s
+MAX_T_ANG_VEL = 10.0 # rad/s
 
 # --- Goal Settings ---
 DESIRED_T_POSE = torch.tensor([500.0, 500.0, 0.0], dtype=torch.float32)
-GOAL_POS_TOL = 30.0
+GOAL_POS_TOL = 1.0
 GOAL_ORIENT_TOL = 0.2
 
 # --- Arm Base Position ---
@@ -270,8 +273,22 @@ def main():
 				# we do the reverse so the T is pushed away from the agent:
 				raw_push_direction = contact_pt - ee_pos
 				
+				# Debugging snippet:
+				dist_to_base = torch.norm(T_pose[:2] - BASE_POS)
+				print("\n-----------------------------\n")
+				print(f"DEBUG: T-block center distance to base: {dist_to_base:.3f}")
+
+				raw_dir_norm = torch.norm(raw_push_direction)
+				print(f"DEBUG: raw_push_direction magnitude: {raw_dir_norm:.3f}")
+				print(f"DEBUG: raw_push_direction = {raw_push_direction.tolist()}")
+
+				# If you do fallback logic:
 				if torch.norm(raw_push_direction) < 1e-3:
-					fallback_dir = contact_pt - T_pose[:2]  # or contact_pt - T_pose[:2]
+					fallback_dir = contact_pt - T_pose[:2]  # or something else
+					print("DEBUG: fallback triggered!")
+					# also print the fallback_dir
+					print(f"DEBUG: fallback_dir = {fallback_dir.tolist()}")
+
 					push_direction = fallback_dir / torch.norm(fallback_dir) if torch.norm(fallback_dir) > 0 else torch.tensor([0.0, 0.0])
 				else:
 					push_direction = raw_push_direction / torch.norm(raw_push_direction)
@@ -281,15 +298,29 @@ def main():
 				force_magnitude = compute_contact_force(clamped_penetration)
 				force = force_magnitude * push_direction
 
+				print(f"DEBUG: push_direction = {push_direction.tolist()}")
+				print(f"DEBUG: penetration={penetration:.3f}, clamped={clamped_penetration:.3f}")
+				print(f"DEBUG: force_magnitude={force_magnitude:.3f}")
+				print(f"DEBUG: final force = {force.tolist()}")
+
+				# **Positional correction:**
+				if penetration > 0:
+					correction = (penetration - MAX_PENETRATION) * push_direction
+					T_pose[:2] = T_pose[:2] + correction  # immediately push T out
+
+
 				# Update velocity/position as before...
-				T_velocity = (T_velocity + (force / M_T) * dt) * LINEAR_DAMPING
+				T_velocity = torch.clamp((T_velocity + (force / M_T) * dt) * LINEAR_DAMPING, min=-MAX_T_VEL, max=MAX_T_VEL)
+				print(f"DEBUG: T_velocity = {T_velocity.tolist()}")
 				T_pose[:2] = T_pose[:2] + T_velocity * dt
 
 				# Compute torque...
 				r = contact_pt - T_pose[:2]
 				torque = r[0] * force[1] - r[1] * force[0]
 				angular_acceleration = torque / I_MOMENT
-				T_angular_velocity = (T_angular_velocity + angular_acceleration * dt) * ANGULAR_DAMPING
+				T_angular_velocity = torch.clamp((T_angular_velocity + angular_acceleration * dt) * ANGULAR_DAMPING, min=-MAX_T_ANG_VEL, max=MAX_T_ANG_VEL)
+				print(f"DEBUG: T_angular_velocity = {T_angular_velocity:3f}")
+
 				T_pose[2] = T_pose[2] + T_angular_velocity * dt
 
 				draw_arm(screen, BASE_POS, current_angles)
@@ -313,7 +344,7 @@ def main():
 				base_arrow_scale = 0.05
 				f_norm = torch.norm(arrow_force)
 				proposed_length = f_norm * base_arrow_scale
-				MAX_ARROW_LENGTH = 40.0
+				MAX_ARROW_LENGTH = 60.0
 				if proposed_length > MAX_ARROW_LENGTH and f_norm > 0:
 					arrow_scale = MAX_ARROW_LENGTH / f_norm
 				else:
@@ -332,6 +363,9 @@ def main():
 			else:
 				draw_arm(screen, BASE_POS, current_angles)
 				draw_T(screen, T_pose)
+				# reset T vel
+				T_velocity = torch.zeros(2, dtype=torch.float32)
+				T_angular_velocity = 0.0
 			
 			timestamp = time.time() - session_start_time
 			demo_data.append({
