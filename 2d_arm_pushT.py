@@ -15,7 +15,7 @@ BACKGROUND_COLOR = (255, 255, 255)
 ARM_COLOR = (50, 100, 200)
 T_COLOR = (200, 50, 50)          # Active T color
 GOAL_T_COLOR = (0, 200, 0)       # Goal T outline color
-FPS = 60
+FPS = 120
 
 # --- 3R Arm Parameters ---
 L1 = 150.0
@@ -215,6 +215,7 @@ def main():
 	session_active = False
 	demo_data = []
 	session_start_time = None
+	smoothed_target = None
 
 	current_angles = torch.zeros(3, dtype=torch.float32)
 	T_pose = torch.tensor([250.0, 250.0, 0.0], dtype=torch.float32)
@@ -258,11 +259,30 @@ def main():
 				print(f"Session data saved to {filename}.")
 				continue
 
-			new_angles, err_norm = ik_jacobian(relative_target, current_angles)
+			# If smoothed_target isn't set yet, initialize it:
+			if smoothed_target is None:
+				smoothed_target = relative_target.clone()
+				
+			# Compute the change (delta) from the current smoothed target:
+			delta = relative_target - smoothed_target
+			max_target_delta = 10.0  # Maximum allowed change in pixels per frame
+			# Clamp the delta to ensure smooth transitions:
+			delta_clamped = torch.clamp(delta, -max_target_delta, max_target_delta)
+
+			# Do smoothing if the mouse intersects the T.
+			T_polygon = get_t_polygon(T_pose)
+			dist, _ = compute_contact(relative_target, T_polygon)
+
+			# If we're within 2X contact range, smooth.
+			if dist < EE_RADIUS * 4.0:
+				smoothed_target = smoothed_target + delta_clamped
+			else:
+				smoothed_target = relative_target.clone()
+
+			new_angles, err_norm = ik_jacobian(smoothed_target, current_angles)
 			current_angles = new_angles
 			ee_pos = forward_kinematics(current_angles) + BASE_POS
 
-			T_polygon = get_t_polygon(T_pose)
 			dist, contact_pt = compute_contact(ee_pos, T_polygon)
 			
 			dt = 1.0 / FPS
