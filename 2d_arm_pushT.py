@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import math
+import random
 
 import torch
 import torch.nn.functional as F
@@ -45,8 +46,17 @@ MAX_PENETRATION = 0.5
 MAX_T_VEL = 100.0 # m/s
 MAX_T_ANG_VEL = 10.0 # rad/s
 
+# --- Function to Randomize T Pose ---
+def random_t_pose():
+    # Use a margin to keep the T completely visible on screen.
+    margin = 100  
+    x = random.uniform(margin, SCREEN_WIDTH - margin)
+    y = random.uniform(margin, SCREEN_HEIGHT - margin)
+    theta = random.uniform(-math.pi, math.pi)
+    return torch.tensor([x, y, theta], dtype=torch.float32)
+
 # --- Goal Settings ---
-DESIRED_T_POSE = torch.tensor([500.0, 500.0, 0.0], dtype=torch.float32)
+DESIRED_T_POSE = random_t_pose()  # Randomized goal pose
 GOAL_POS_TOL = 2.0
 GOAL_ORIENT_TOL = 0.2
 
@@ -195,7 +205,7 @@ prev_ee_pos = None  # For storing previous EE position
 
 # --- Main Loop ---
 def main():
-    global prev_ee_pos, smoothed_target
+    global prev_ee_pos, smoothed_target, DESIRED_T_POSE
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption("Push T Data Collection (History-based Correction)")
@@ -210,7 +220,8 @@ def main():
     smoothed_target = None
 
     current_angles = torch.zeros(3, dtype=torch.float32)
-    T_pose = torch.tensor([250.0, 250.0, 0.0], dtype=torch.float32)
+    # Randomize starting T pose on launch. (It will be re-randomized on each new session.)
+    T_pose = random_t_pose()
     T_velocity = torch.zeros(2, dtype=torch.float32)
     T_angular_velocity = 0.0
 
@@ -230,7 +241,9 @@ def main():
                     session_active = True
                     demo_data = []
                     session_start_time = time.time()
-                    T_pose = torch.tensor([250.0, 250.0, 0.0], dtype=torch.float32)
+                    # Randomize both start and goal T poses for new session.
+                    T_pose = random_t_pose()
+                    DESIRED_T_POSE = random_t_pose()
                     current_angles = torch.zeros(3, dtype=torch.float32)
                     T_velocity = torch.zeros(2, dtype=torch.float32)
                     T_angular_velocity = 0.0
