@@ -19,9 +19,9 @@ GOAL_T_COLOR = (0, 200, 0)       # Goal T outline color
 FPS = 120
 
 # --- 3R Arm Parameters ---
-L1 = 200.0
-L2 = 200.0
-L3 = 160.0
+L1 = 300.0
+L2 = 300.0
+L3 = 200.0
 ARM_LENGTH = L1 + L2 + L3
 
 # --- Jacobian IK Parameters ---
