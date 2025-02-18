@@ -33,7 +33,7 @@ ANGULAR_DAMPING = 100.0
 LINEAR_DAMPING = 0.1
 MAX_PENETRATION = 0.5
 MAX_T_VEL = 100.0      # Max linear velocity
-MAX_T_ANG_VEL = 2.0   # Max angular velocity
+MAX_T_ANG_VEL = 2.5   # Max angular velocity
 
 # Goal tolerances for ending the session
 GOAL_POS_TOL = 2.0
