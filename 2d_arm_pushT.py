@@ -33,7 +33,7 @@ EE_RADIUS = 16.0
 
 # --- Contact Mechanics Parameters (gym-pusht defaults) ---
 K_CONTACT = 1000.0    # Penalty stiffness (softer contact is achieved by adjusting this)
-M_T = 100.0             # Mass of T block
+M_T = 100.0           # Mass of T block
 I_MOMENT = 10.0       # Moment of inertia for rotation
 ANGULAR_DAMPING = 0.1
 LINEAR_DAMPING = 0.1
@@ -47,8 +47,8 @@ MAX_T_ANG_VEL = 10.0 # rad/s
 
 # --- Goal Settings ---
 DESIRED_T_POSE = torch.tensor([500.0, 500.0, 0.0], dtype=torch.float32)
-GOAL_POS_TOL = 5.0
-GOAL_ORIENT_TOL = 1
+GOAL_POS_TOL = 2.0
+GOAL_ORIENT_TOL = 0.2
 
 # --- Arm Base Position ---
 BASE_POS = torch.tensor([300.0, 300.0], dtype=torch.float32)
@@ -110,7 +110,7 @@ def compute_contact_force(penetration: float, k_contact: float = K_CONTACT) -> f
     """Compute force magnitude using a penalty model."""
     return k_contact * penetration if penetration > 0 else 0.0
 
-# --- Kinematics Functions ---
+# --- Kinematics Functions using torch and einsum ---
 def forward_kinematics(joint_angles: torch.Tensor) -> torch.Tensor:
     theta1, theta2, theta3 = joint_angles[0], joint_angles[1], joint_angles[2]
     x = L1 * torch.cos(theta1) + L2 * torch.cos(theta1 + theta2) + L3 * torch.cos(theta1 + theta2 + theta3)
@@ -137,6 +137,9 @@ def ik_jacobian(target: torch.Tensor, initial_angles: torch.Tensor, iterations=I
     for i in range(iterations):
         pos = forward_kinematics(theta)
         error = target - pos
+        if not torch.isfinite(torch.norm(error)) or torch.norm(error) > 1e4:
+            print("Invalid IK result detected. Quitting session.")
+            return theta, float('inf')
         if torch.norm(error) < tol:
             break
         J = compute_jacobian(theta)
@@ -159,7 +162,6 @@ def draw_arm(surface, base: torch.Tensor, joint_angles: torch.Tensor):
     pygame.draw.line(surface, ARM_COLOR, (x1, y1), (x2, y2), 5)
     pygame.draw.line(surface, ARM_COLOR, (x2, y2), (x3, y3), 5)
     for pt in [(x0, y0), (x1, y1), (x2, y2), (x3, y3)]:
-        # Draw hollow circles (outline only)
         pygame.draw.circle(surface, (0, 0, 0), (int(pt[0]), int(pt[1])), 16, 2)
     return torch.tensor([x3, y3], dtype=torch.float32)
 
@@ -175,7 +177,6 @@ def draw_goal_T(surface):
     pygame.draw.polygon(surface, GOAL_T_COLOR, pts, width=3)
 
 def draw_arrow(surface, color, start, end, width=3, head_length=10, head_angle=30):
-    """Draw an arrow from start to end with a head."""
     pygame.draw.line(surface, color, start, end, width)
     dx = end[0] - start[0]
     dy = end[1] - start[1]
@@ -190,7 +191,7 @@ def draw_arrow(surface, color, start, end, width=3, head_length=10, head_angle=3
     pygame.draw.line(surface, color, end, right_end, width)
 
 # --- History-based Positional Correction ---
-prev_ee_pos = None  # To store previous EE position
+prev_ee_pos = None  # For storing previous EE position
 
 # --- Main Loop ---
 def main():
@@ -201,8 +202,7 @@ def main():
     clock = pygame.time.Clock()
     
     print("Press [N] to start a new push session.")
-    print("Use the mouse to set the desired EE target (relative to base).")
-    print("Collision resolution uses history of EE motion for smooth correction.")
+    print("Session will save if goal tolerances are met; session quits if an invalid IK result is detected or if the mouse is outside the arm workspace.")
 
     session_active = False
     demo_data = []
@@ -244,11 +244,18 @@ def main():
         if session_active:
             mouse_pos = torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
             relative_target = mouse_pos - BASE_POS
+            
+            # Terminate session if mouse is outside the arm workspace.
+            if torch.norm(relative_target) > ARM_LENGTH:
+                print("Mouse outside arm workspace. Terminating session.")
+                session_active = False
+                demo_data = []  # Discard demo data.
+                continue
 
             # Initialize smoothed_target if needed.
             if smoothed_target is None:
                 smoothed_target = relative_target.clone()
-            # Smoothing only if the mouse is in contact with T:
+            # Apply smoothing if mouse is near T (within 4*EE_RADIUS)
             T_polygon = get_t_polygon(T_pose)
             dist_temp, _ = compute_contact(relative_target, T_polygon)
             if dist_temp < EE_RADIUS * 4.0:
@@ -259,12 +266,18 @@ def main():
             else:
                 smoothed_target = relative_target.clone()
 
-            # Apply IK smoothing using smoothed_target
             new_angles, err_norm = ik_jacobian(smoothed_target, current_angles)
+            # If IK result is invalid, terminate the session.
+            if not torch.isfinite(torch.tensor(err_norm)) or err_norm > 1e4:
+                print("Invalid IK result detected. Terminating session.")
+                session_active = False
+                demo_data = []
+                continue
+
             current_angles = new_angles
             ee_pos = forward_kinematics(current_angles) + BASE_POS
 
-            # Maintain EE history for smoothing positional correction.
+            # Maintain EE history for positional correction.
             if prev_ee_pos is None:
                 prev_ee_pos = ee_pos.clone()
             ee_velocity = ee_pos - prev_ee_pos
@@ -275,29 +288,27 @@ def main():
             dt = 1.0 / FPS
 
             if dist < EE_RADIUS:
-                # Compute raw push direction (push T away from EE)
-                raw_push_direction = contact_pt - ee_pos
+                raw_push_direction = contact_pt - ee_pos  # push T away from EE
                 if torch.norm(raw_push_direction) < 1e-3:
                     fallback_dir = contact_pt - T_pose[:2]
                     push_direction = fallback_dir / torch.norm(fallback_dir) if torch.norm(fallback_dir) > 0 else torch.tensor([0.0, 0.0])
                 else:
                     push_direction = raw_push_direction / torch.norm(raw_push_direction)
-
-                # Check history: if the current push_direction conflicts with ee_velocity,
-                # blend in part of the previous EE direction.
+                
+                # History-based blending if push_direction conflicts with ee_velocity.
                 if torch.norm(ee_velocity) > 0:
                     ee_dir = ee_velocity / torch.norm(ee_velocity)
                     if torch.dot(push_direction, ee_dir) < -0.5:
                         blended = 0.7 * ee_dir + 0.3 * push_direction
                         if torch.norm(blended) > 0:
                             push_direction = blended / torch.norm(blended)
-
+                
                 penetration = EE_RADIUS - dist
                 clamped_penetration = min(penetration, MAX_PENETRATION)
                 force_magnitude = compute_contact_force(clamped_penetration)
                 force = force_magnitude * push_direction
 
-                # Hard positional correction to prevent deep penetration:
+                # Hard positional correction if penetration exceeds threshold.
                 if penetration > MAX_PENETRATION:
                     correction = (penetration - MAX_PENETRATION) * push_direction
                     T_pose[:2] = T_pose[:2] + correction
@@ -311,17 +322,16 @@ def main():
                 T_angular_velocity = torch.clamp((T_angular_velocity + angular_acceleration * dt) * ANGULAR_DAMPING, min=-MAX_T_ANG_VEL, max=MAX_T_ANG_VEL)
                 T_pose[2] = T_pose[2] + T_angular_velocity * dt
 
-                # Save visualization parameters to draw after everything:
+                # Save visualization parameters for drawing after everything:
                 contact_x = int(contact_pt[0].item())
                 contact_y = int(contact_pt[1].item())
                 arrow_force = force.clone()
                 arrow_cp = contact_pt.clone()
 
-            # Draw arm and T (they're drawn below, but we want contact visuals on top)
             draw_arm(screen, BASE_POS, current_angles)
             draw_T(screen, T_pose)
 
-            # Now draw contact visuals (if in contact)
+            # Draw contact visuals on top:
             if dist < EE_RADIUS:
                 cross_size = 5
                 pygame.draw.line(screen, (255, 0, 0),
@@ -333,7 +343,7 @@ def main():
                 base_arrow_scale = 0.05
                 f_norm = torch.norm(arrow_force)
                 proposed_length = f_norm * base_arrow_scale
-                MAX_ARROW_LENGTH = 60.0  # maximum arrow length equals T leg width
+                MAX_ARROW_LENGTH = 60.0
                 arrow_scale = MAX_ARROW_LENGTH / f_norm if (proposed_length > MAX_ARROW_LENGTH and f_norm > 0) else base_arrow_scale
                 arrow_end_vec = arrow_force * arrow_scale
                 arrow_start = (contact_x, contact_y)
@@ -354,6 +364,16 @@ def main():
                 "T_pose": T_pose.tolist(),
                 "ik_error": err_norm
             })
+            
+            pos_error = torch.norm(T_pose[:2] - DESIRED_T_POSE[:2]).item()
+            orient_error = abs(angle_diff(T_pose[2], DESIRED_T_POSE[2]))
+            if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
+                print("T object reached desired pose. Session complete.")
+                filename = f"session_{int(time.time())}.json"
+                with open(filename, "w") as f:
+                    json.dump(demo_data, f, indent=2)
+                print(f"Session data saved to {filename}.")
+                session_active = False
         else:
             font = pygame.font.SysFont("Arial", 20)
             text = font.render("Press [N] to start a new push session", True, (0, 0, 0))
