@@ -29,11 +29,11 @@ EE_RADIUS = 16.0
 # Contact Mechanics Parameters
 K_CONTACT = 1000.0    # Contact stiffness
 M_T = 100.0           # Mass of T block
-ANGULAR_DAMPING = 100.0
+ANGULAR_DAMPING = 50.0
 LINEAR_DAMPING = 0.1
 MAX_PENETRATION = 0.5
 MAX_T_VEL = 100.0      # Max linear velocity
-MAX_T_ANG_VEL = 2.5   # Max angular velocity
+MAX_T_ANG_VEL = 3.0   # Max angular velocity
 
 # Goal tolerances for ending the session
 GOAL_POS_TOL = 2.0
@@ -48,7 +48,7 @@ def random_t_pose():
 	Generate a random T-object pose (x, y, theta) within screen bounds.
 	A margin is used to keep the object fully visible.
 	"""
-	margin = 100  
+	margin = 100
 	x = random.uniform(margin, SCREEN_WIDTH - margin)
 	y = random.uniform(margin, SCREEN_HEIGHT - margin)
 	theta = random.uniform(-math.pi, math.pi)
@@ -212,8 +212,8 @@ class ArmNR:
 		pts = [(int(pos[0].item()), int(pos[1].item())) for pos in positions]
 		for i in range(len(pts) - 1):
 			pygame.draw.line(surface, color, pts[i], pts[i+1], width)
-		for pt in pts:
-			pygame.draw.circle(surface, (0, 0, 0), pt, joint_radius, 2)
+		# Draw the EE.
+		pygame.draw.circle(surface, (0, 0, 0), pts[-1], joint_radius, 2)
 		return positions[-1]
 
 # ------------------------- TObject Class -------------------------
@@ -239,9 +239,6 @@ def polygon_moi(vertices: torch.Tensor, mass: float) -> float:
 	return I
 
 class TObject:
-	"""
-	Class representing the T-shaped object.
-	"""
 	local_vertices = torch.tensor([
 		[-40.0, -10.0],
 		[40.0, -10.0],
@@ -265,7 +262,11 @@ class TObject:
 		# Compute the true moment of inertia from the centered polygon.
 		self.moi = polygon_moi(TObject.local_vertices_adjusted, M_T)
 
-	def get_polygon(self) -> torch.Tensor:
+	def get_polygon(self):
+		"""
+		Compute world-space vertices by rotating the local vertices
+		and then translating by self.pose[:2].
+		"""
 		theta = self.pose[2]
 		cos_t = torch.cos(theta)
 		sin_t = torch.sin(theta)
@@ -273,6 +274,33 @@ class TObject:
 		rotated = torch.einsum("kj,ij->ki", TObject.local_vertices_adjusted, R)
 		world_vertices = rotated + self.pose[:2]
 		return world_vertices
+
+	def compute_centroid(self):
+		"""
+		Compute the area-weighted centroid (center of mass) of the T object's
+		polygon (in world coordinates). Assumes that the vertices from get_polygon()
+		are given in order.
+		"""
+		poly = self.get_polygon()  # List or tensor of vertices, shape (n,2)
+		n = poly.shape[0]
+		# Initialize accumulators.
+		A = 0.0
+		Cx = 0.0
+		Cy = 0.0
+		for i in range(n):
+			# Wrap around so that vertex n is vertex 0.
+			j = (i + 1) % n
+			xi, yi = poly[i][0], poly[i][1]
+			xj, yj = poly[j][0], poly[j][1]
+			cross = xi * yj - xj * yi
+			A += cross
+			Cx += (xi + xj) * cross
+			Cy += (yi + yj) * cross
+		A = A / 2.0
+		# Avoid division by zero (should not happen for a valid polygon).
+		Cx = Cx / (6.0 * A)
+		Cy = Cy / (6.0 * A)
+		return torch.tensor([Cx, Cy], dtype=torch.float32)
 
 	def update(self, force: torch.Tensor, dt: float, contact_pt: torch.Tensor = None):
 		"""
@@ -283,27 +311,54 @@ class TObject:
 									min=-MAX_T_VEL, max=MAX_T_VEL)
 		self.pose[:2] = self.pose[:2] + self.velocity * dt
 
-		# Compute torque if a contact point is provided.
+		# Compute torque using the lever arm from the true centroid.
 		if contact_pt is not None:
-			r = contact_pt - self.pose[:2]  # lever arm from center of mass
-			# 2D cross product (scalar)
-			torque = r[0]*force[1] - r[1]*force[0]
+			# Compute the true centroid (in world coordinates).
+			true_centroid = self.compute_centroid()
+			# Compute the lever arm from the centroid to the contact point.
+			r = contact_pt - true_centroid
+
+			# Choose a constant that controls the exponential growth rate.
+			k = 50.0  # adjust as needed
+
+			# Compute scaling factors for each force component.
+			# Scale F_y based on the horizontal offset (r[0]) and
+			# scale F_x based on the vertical offset (r[1]).
+			scale_F_y = torch.exp(torch.abs(r[0]) / k)
+			scale_F_x = torch.exp(torch.abs(r[1]) / k)
+
+			# Apply the scaling on the individual force components.
+			scaled_force_x = scale_F_x * force[0]
+			scaled_force_y = scale_F_y * force[1]
+
+			# Compute the torque using the scaled force components.
+			torque = r[0] * scaled_force_y - r[1] * scaled_force_x
 		else:
 			torque = 0.0
 
+
+		# Angular acceleration computed from torque.
 		angular_acceleration = torque / self.moi
+		# Update angular velocity (ensure it remains a scalar).
 		self.angular_velocity = torch.clamp((self.angular_velocity + angular_acceleration * dt) * ANGULAR_DAMPING,
-                                           min=-MAX_T_ANG_VEL, max=MAX_T_ANG_VEL)
+											min=-MAX_T_ANG_VEL, max=MAX_T_ANG_VEL)
+		# Update orientation.
 		self.pose[2] = self.pose[2] + self.angular_velocity * dt
 
-	def draw(self, surface):
+	def draw(self, surface, joint_radius=8, centroid_radius=4, centroid_color=(0, 0, 0)):
 		"""
-		Draw the T object onto the pygame surface.
+		Draw the T object and also draw its true centroid.
 		"""
 		polygon = self.get_polygon()
-		pts = [(int(pt[0].item()), int(pt[1].item())) for pt in polygon]
+		pts = [(int(pos[0].item()), int(pos[1].item())) for pos in polygon]
+		# Draw the T object (polygon) – you may wish to use a fill or outline.
 		pygame.draw.polygon(surface, T_COLOR, pts)
+		# Compute and draw the true centroid.
+		centroid = self.compute_centroid()
+		centroid_pt = (int(centroid[0].item()), int(centroid[1].item()))
+		pygame.draw.circle(surface, centroid_color, centroid_pt, centroid_radius)
 		return polygon
+
 
 	def compute_contact(self, ee_pos: torch.Tensor) -> (float, torch.Tensor):
 		"""
@@ -353,7 +408,6 @@ class Simulation:
 		self.demo_data = []
 		self.session_start_time = None
 		self.smoothed_target = None
-		self.prev_ee_pos = None
 
 	def run(self):
 		"""
@@ -384,7 +438,6 @@ class Simulation:
 						self.arm.joint_angles = torch.zeros(NUM_JOINTS, dtype=torch.float32)
 						self.T_object.velocity = torch.zeros(2, dtype=torch.float32)
 						self.T_object.angular_velocity = 0.0
-						self.prev_ee_pos = None
 						self.smoothed_target = None
 						print("New push session started.")
 
@@ -426,14 +479,7 @@ class Simulation:
 					continue
 
 				# Compute the world-space end-effector position.
-				ee_pos = self.arm.forward_kinematics()  # Already in world coordinates!
-
-
-				# Compute the end-effector velocity from its previous position.
-				if self.prev_ee_pos is None:
-					self.prev_ee_pos = ee_pos.clone()
-				ee_velocity = ee_pos - self.prev_ee_pos
-				self.prev_ee_pos = ee_pos.clone()
+				ee_pos = self.arm.forward_kinematics()
 
 				# Check for contact between the end-effector and the T object.
 				dist, contact_pt = self.T_object.compute_contact(ee_pos)
@@ -447,21 +493,13 @@ class Simulation:
 					else:
 						push_direction = raw_push_direction / torch.norm(raw_push_direction)
 
-					# Blend push direction with the EE velocity if they conflict.
-					if torch.norm(ee_velocity) > 0:
-						ee_dir = ee_velocity / torch.norm(ee_velocity)
-						if torch.dot(push_direction, ee_dir) < -0.5:
-							blended = 0.7 * ee_dir + 0.3 * push_direction
-							if torch.norm(blended) > 0:
-								push_direction = blended / torch.norm(blended)
-
 					penetration = EE_RADIUS - dist
 					clamped_penetration = min(penetration, MAX_PENETRATION)
 					force_magnitude = K_CONTACT * clamped_penetration
 					force = force_magnitude * push_direction
 
 					# Hard positional correction if penetration is too large.
-					if penetration > MAX_PENETRATION:
+					if penetration > 2*MAX_PENETRATION:
 						correction = (penetration - MAX_PENETRATION) * push_direction
 						self.T_object.pose[:2] += correction
 
