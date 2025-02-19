@@ -319,6 +319,7 @@ class TObject:
 			r = contact_pt - true_centroid
 
 			# Choose a constant that controls the exponential growth rate.
+			# https://www.desmos.com/calculator/o9jd8y9lp4
 			k = 1.0  # adjust as needed
 
 			# Compute scaling factors for each force component.
