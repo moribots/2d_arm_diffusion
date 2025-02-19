@@ -21,7 +21,7 @@ BACKGROUND_COLOR = (255, 255, 255)
 ARM_COLOR = (50, 100, 200)
 T_COLOR = (200, 50, 50)          # Active T color
 GOAL_T_COLOR = (0, 200, 0)       # Goal T outline color
-FPS = 120
+FPS = 240
 
 # End-Effector Parameters
 EE_RADIUS = 16.0
@@ -319,7 +319,7 @@ class TObject:
 			r = contact_pt - true_centroid
 
 			# Choose a constant that controls the exponential growth rate.
-			k = 50.0  # adjust as needed
+			k = 1.0  # adjust as needed
 
 			# Compute scaling factors for each force component.
 			# Scale F_y based on the horizontal offset (r[0]) and
