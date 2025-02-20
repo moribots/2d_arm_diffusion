@@ -173,7 +173,7 @@ class Simulation:
 					pygame.draw.line(self.screen, (0, 0, 255), intermediate_pt, cp_pt, 2)
 
 					# Scale and draw force vectors.
-					force_scale = 0.002
+					force_scale = 0.005
 					force_x_end = (int(cp_pt[0] + force[0].item() * force_scale), cp_pt[1])
 					draw_arrow(self.screen, (255, 0, 255), cp_pt, force_x_end, width=3, head_length=8, head_angle=30)
 					force_y_end = (cp_pt[0], int(cp_pt[1] + force[1].item() * force_scale))
