@@ -63,9 +63,10 @@ class TObject:
 		cos_t = torch.cos(theta)
 		sin_t = torch.sin(theta)
 		R = torch.tensor([[cos_t, -sin_t], [sin_t, cos_t]])
-		# Using einops to rearrange vertices to (2, N) for matrix multiplication.
+		# Rearranging vertices to shape (2, N) for einsum.
 		vertices = rearrange(TObject.local_vertices_adjusted, "n d -> d n")
-		rotated = torch.matmul(R, vertices)  # shape: (2, N)
+		# Use einsum to multiply R and vertices.
+		rotated = torch.einsum("ij,jk->ik", R, vertices)
 		rotated = rearrange(rotated, "d n -> n d")
 		return rotated + self.pose[:2]
 
@@ -80,7 +81,7 @@ class TObject:
 		sin_t = torch.sin(theta)
 		R = torch.tensor([[cos_t, -sin_t], [sin_t, cos_t]])
 		vertices = rearrange(TObject.local_vertices_adjusted, "n d -> d n")
-		rotated = torch.matmul(R, vertices)
+		rotated = torch.einsum("ij,jk->ik", R, vertices)
 		rotated = rearrange(rotated, "d n -> n d")
 		return rotated + pose[:2]
 
