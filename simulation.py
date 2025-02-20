@@ -105,12 +105,6 @@ class Simulation:
 		while running:
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
-					if self.demo_data:
-						os.makedirs("training_data", exist_ok=True)  # Create the directory if it doesn't exist
-						filename = os.path.join("training_data", f"session_{int(time.time())}.json")
-						with open(filename, "w") as f:
-							json.dump(self.demo_data, f, indent=2)
-						print(f"Session data saved to {filename}.")
 					pygame.quit()
 					return
 				elif event.type == pygame.KEYDOWN:
