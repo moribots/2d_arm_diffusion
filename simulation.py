@@ -2,6 +2,7 @@
 
 import pygame
 import json
+import os
 import time
 import torch
 from config import (SCREEN_WIDTH, SCREEN_HEIGHT, BACKGROUND_COLOR, FPS,
@@ -105,7 +106,8 @@ class Simulation:
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
 					if self.demo_data:
-						filename = f"session_{int(time.time())}.json"
+						os.makedirs("training_data", exist_ok=True)  # Create the directory if it doesn't exist
+						filename = os.path.join("training_data", f"session_{int(time.time())}.json")
 						with open(filename, "w") as f:
 							json.dump(self.demo_data, f, indent=2)
 						print(f"Session data saved to {filename}.")
@@ -208,7 +210,8 @@ class Simulation:
 				orient_error = abs(angle_diff(self.T_object.pose[2], self.goal_pose[2]))
 				if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
 					print("T object reached desired pose. Session complete.")
-					filename = f"session_{int(time.time())}.json"
+					os.makedirs("training_data", exist_ok=True)  # Create the directory if it doesn't exist
+					filename = os.path.join("training_data", f"session_{int(time.time())}.json")
 					with open(filename, "w") as f:
 						json.dump(self.demo_data, f, indent=2)
 					print(f"Session data saved to {filename}.")
