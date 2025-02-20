@@ -7,7 +7,7 @@ import time
 import torch
 from config import (SCREEN_WIDTH, SCREEN_HEIGHT, BACKGROUND_COLOR, FPS,
 					GOAL_POS_TOL, GOAL_ORIENT_TOL, EE_RADIUS, ARM_LENGTH, BASE_POS,
-					K_CONTACT, K_DAMPING, NUM_JOINTS, LINK_LENGTHS)
+					K_CONTACT, K_DAMPING, NUM_JOINTS, LINK_LENGTHS, TRAINING_DATA_DIR)
 from utils import random_t_pose, angle_diff, draw_arrow
 from arm import ArmNR
 from t_object import TObject
@@ -81,7 +81,7 @@ class Simulation:
 
 	def get_target_input(self):
 		"""
-		Get the target position either from an external input provider or from the mouse.
+		Get the target position either from an external input provider (e.g trained agent) or from the mouse.
 		"""
 		if self.input_provider is not None:
 			return self.input_provider()
@@ -101,6 +101,7 @@ class Simulation:
 	def run(self):
 		print("Press [N] to start a new push session.")
 		print("Session saves if goal tolerances are met; session quits if IK fails or if input leaves workspace.")
+		os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
 		running = True
 		while running:
 			for event in pygame.event.get():
@@ -193,9 +194,8 @@ class Simulation:
 				timestamp = time.time() - self.session_start_time
 				self.demo_data.append({
 					"time": timestamp,
-					"input_target": target.tolist(),
-					"joint_angles": self.arm.joint_angles.tolist(),
-					"ee_pos": ee_pos.tolist(),
+					"goal_pose": self.goal_pose.tolist(),  # Use desired T pose
+					"action": ee_pos.tolist(),
 					"T_pose": self.T_object.pose.tolist(),
 					"ik_error": ik_error
 				})
@@ -204,8 +204,7 @@ class Simulation:
 				orient_error = abs(angle_diff(self.T_object.pose[2], self.goal_pose[2]))
 				if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
 					print("T object reached desired pose. Session complete.")
-					os.makedirs("training_data", exist_ok=True)  # Create the directory if it doesn't exist
-					filename = os.path.join("training_data", f"session_{int(time.time())}.json")
+					filename = os.path.join(TRAINING_DATA_DIR, f"session_{int(time.time())}.json")
 					with open(filename, "w") as f:
 						json.dump(self.demo_data, f, indent=2)
 					print(f"Session data saved to {filename}.")

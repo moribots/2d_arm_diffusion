@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import torch
 
 # Screen settings
@@ -35,4 +33,7 @@ GOAL_ORIENT_TOL = 0.08
 
 # Arm collision parameters
 LINK_COLLISION_THRESHOLD = 20.0  
-LINK_COLLISION_WEIGHT = 5.0        
+LINK_COLLISION_WEIGHT = 5.0
+
+# Directory for saving training data
+TRAINING_DATA_DIR = "training_data"
