@@ -27,7 +27,7 @@ EE_RADIUS = 20.0
 K_CONTACT = 1000.0    # Contact stiffness
 M_T = 0.5          # Mass of T block
 # Damping constants updated to match gym-pusht (no aggressive clamping)
-LINEAR_DAMPING = 1.5
+LINEAR_DAMPING = 1.2
 ANGULAR_DAMPING = 1.0
 K_DAMPING = 10.0
 
