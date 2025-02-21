@@ -43,7 +43,7 @@ LEARNING_RATE = 1e-3  # Learning rate for the optimizer
 
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
-CONDITION_DIM = 3   # Desired T pose (including rotation) is 3D: [x, y, theta]
+CONDITION_DIM = 6   # Now a 6D vector: [goal_x, goal_y, goal_theta, current_x, current_y, current_theta].
 
 # Directory for saving training data
 TRAINING_DATA_DIR = "training_data"

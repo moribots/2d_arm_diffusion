@@ -16,8 +16,10 @@ class PolicyDataset(Dataset):
 	"""
 	PolicyDataset loads training samples from JSON files stored in TRAINING_DATA_DIR.
 	Each sample is expected to have:
-	  - "condition": The desired T pose [x, y, theta].
+	  - "goal_pose": The desired T pose [x, y, theta].
+	  - "T_pose": The current T object pose [x, y, theta].
 	  - "action": The end-effector (EE) position (a 2D vector) recorded during data collection.
+	The condition is the concatenation of goal_pose and T_pose, forming a 6D vector.
 	"""
 	def __init__(self, data_dir):
 		self.samples = []
@@ -35,10 +37,13 @@ class PolicyDataset(Dataset):
 		return len(self.samples)
 	
 	def __getitem__(self, idx):
-		# Retrieve and convert the sample at index idx to torch tensors.
+		# Retrieve sample and convert fields to torch tensors.
 		sample = self.samples[idx]
-		condition = torch.tensor(sample["goal_pose"], dtype=torch.float32)  # Shape: (3,)
-		action = torch.tensor(sample["action"], dtype=torch.float32)        # Shape: (2,)
+		goal_pose = torch.tensor(sample["goal_pose"], dtype=torch.float32)  # Shape: (3,)
+		T_pose = torch.tensor(sample["T_pose"], dtype=torch.float32)        # Shape: (3,)
+		# Concatenate goal_pose and T_pose to form a 6D conditioning vector.
+		condition = torch.cat([goal_pose, T_pose], dim=0)  # Shape: (6,)
+		action = torch.tensor(sample["action"], dtype=torch.float32)         # Shape: (2,)
 		return condition, action
 
 # ------------------------- Training Loop -------------------------

@@ -13,6 +13,7 @@ from utils import random_t_pose, angle_diff, draw_arrow
 from arm import ArmNR
 from t_object import TObject
 from policy_inference import DiffusionPolicyInference
+from einops import rearrange
 
 class Simulation:
 	"""
@@ -104,10 +105,10 @@ class Simulation:
 		In collection mode, use an external input provider or the mouse position.
 		"""
 		if self.mode == "inference":
-			# Use the desired T pose's x,y as condition (unsqueeze to shape (1,3)).
-			cond = self.goal_pose.unsqueeze(0).float()
+			# Concatenate goal_pose and current T_object.pose to form a 6D condition.
+			condition = rearrange([self.goal_pose, self.T_object.pose], 'goal curr -> 1 (goal curr)').float()  # Shape: (1,6)
 			# Sample an EE action from the diffusion policy.
-			return self.policy_inference.sample_action(cond)
+			return self.policy_inference.sample_action(condition)
 		else:
 			if self.input_provider is not None:
 				return self.input_provider()
