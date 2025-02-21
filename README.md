@@ -1,6 +1,6 @@
 # Push T Data Collection
 
-This is my own implementation of [gym-pusht](https://github.com/huggingface/gym-pusht). My goal was to create a similar implementation with the added benefit of being able to generate my own training data, and to potentially use different types of ojbects as well. If you want to modify the T into something else, you can just edit the polygon coordinates in `t_object.py`. I also hooked up an N-DOF arm to the data collection sim to make it a little more realistic. The arm cannot self-collide, but it can overlap the pushed object in 2D (I'm imagining it as being above the object in 3D, with the EE extending down to the plane of the object).
+This is my own implementation of [gym-pusht](https://github.com/huggingface/gym-pusht). My goal was to create a similar implementation with the added benefit of being able to generate my own training data, and to potentially use different types of objects as well. If you want to modify the T into something else, you can just edit the polygon coordinates in `t_object.py`. I also hooked up an N-DOF arm to the data collection sim to make it a little more realistic. The arm cannot self-collide, but it can overlap the pushed object in 2D (I'm imagining it as being above the object in 3D, with the EE extending down to the plane of the object).
 
 `config.py` lets you tune the contact dynamics to your liking.
 
