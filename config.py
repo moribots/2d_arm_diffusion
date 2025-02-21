@@ -35,5 +35,15 @@ GOAL_ORIENT_TOL = 0.08
 LINK_COLLISION_THRESHOLD = 20.0  
 LINK_COLLISION_WEIGHT = 5.0
 
+# Training parameters for diffusion policy
+T = 1000            # Total number of diffusion timesteps
+BATCH_SIZE = 64     # Batch size used during training
+EPOCHS = 50         # Total number of epochs for training
+LEARNING_RATE = 1e-3  # Learning rate for the optimizer
+
+# Action and condition dimensions
+ACTION_DIM = 2      # EE position is 2D
+CONDITION_DIM = 3   # Desired T pose (including rotation) is 3D: [x, y, theta]
+
 # Directory for saving training data
 TRAINING_DATA_DIR = "training_data"
