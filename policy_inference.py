@@ -7,8 +7,8 @@ class DiffusionPolicyInference:
 	def __init__(self, model_path="diffusion_policy.pth", T=1000, device=None):
 		self.T = T
 		self.device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
-		# For EE space, action_dim = 2, condition_dim = 2.
-		self.model = DiffusionPolicy(action_dim=2, condition_dim=2).to(self.device)
+		# Use condition_dim=3 so that the input dimension is 2 + 3 + 128 = 133.
+		self.model = DiffusionPolicy(action_dim=2, condition_dim=3).to(self.device)
 		self.model.load_state_dict(torch.load(model_path, map_location=self.device))
 		self.model.eval()
 		self.betas = get_beta_schedule(self.T).to(self.device)
