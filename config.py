@@ -41,6 +41,9 @@ BATCH_SIZE = 256     # Batch size used during training
 EPOCHS = 5000         # Total number of epochs for training
 LEARNING_RATE = 1e-3  # Learning rate for the optimizer
 
+# Set the temporal window size.
+WINDOW_SIZE = 14  # Number of consecutive action timestamps to form the sequence.
+
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
 CONDITION_DIM = 6   # Now a 6D vector: [goal_x, goal_y, goal_theta, current_x, current_y, current_theta].
