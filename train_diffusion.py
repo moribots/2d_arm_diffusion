@@ -117,9 +117,17 @@ def train():
 			# Forward pass through the model to predict the noise.
 			# The model is conditioned on the noised sample x_t, the timestep t, and the condition.
 			noise_pred = model(x_t, t.float(), condition)
-			
-			# Compute the mean squared error loss between the predicted noise and the true noise.
-			loss = mse_loss(noise_pred, noise)
+
+			# --- Loss Weighting Upgrade ---
+			# Compute a weight for each sample based on the timestep.
+			# Here we choose: weight = sqrt(1 - alpha_bar)
+			# This weights the MSE loss per sample, emphasizing timesteps with higher noise.
+			weight = torch.sqrt(1 - alpha_bar)  # shape: (batch, 1)
+			# Compute elementwise squared error and weight it.
+			loss_elements = mse_loss(noise_pred, noise)  # shape: (batch, action_dim)
+			# Multiply the loss elements by the weight (broadcasting over action_dim) and then average.
+			loss = torch.mean(weight * loss_elements)
+			# --- End Loss Weighting ---
 			
 			# Zero the gradients, backpropagate, and update the model parameters.
 			optimizer.zero_grad()
@@ -148,6 +156,7 @@ def train():
 			if param.grad is not None:
 				grad_norm = param.grad.data.norm(2).item()
 				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
+				print(f'Gradient norm for {name}: {grad_norm:.6f}')
 		
 		# Write the epoch number and average loss to the CSV file.
 		csv_writer.writerow([epoch+1, avg_loss])
