@@ -48,6 +48,7 @@ class PolicyDataset(Dataset):
 
 # ------------------------- Training Loop -------------------------
 def train():
+    print(f"CUDA is available: {torch.cuda.is_available()}")
     # ------------------------- Visualization and CSV Setup -------------------------
     # Initialize TensorBoard SummaryWriter for logging training metrics.
     # The logs will be saved in the "runs/diffusion_policy_training" directory.
@@ -59,9 +60,18 @@ def train():
     csv_writer.writerow(["epoch", "avg_loss"])  # Write CSV header.
     # -------------------------------------------------------------------------
     
+	# Enable CuDNN benchmark mode for performance optimization when input sizes are constant.
+    torch.backends.cudnn.benchmark = True
+    
     # Initialize dataset and data loader.
     dataset = PolicyDataset(TRAINING_DATA_DIR)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=True, 
+        num_workers=4,       # Increase this number based on your CPU cores.
+        pin_memory=True      # Faster data transfer to GPU.
+    )
     
     # Initialize the diffusion policy model.
     model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM)
