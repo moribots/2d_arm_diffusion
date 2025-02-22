@@ -37,9 +37,9 @@ LINK_COLLISION_WEIGHT = 5.0
 
 # Training parameters for diffusion policy
 T = 1000            # Total number of diffusion timesteps
-BATCH_SIZE = 64     # Batch size used during training
+BATCH_SIZE = 256     # Batch size used during training
 EPOCHS = 5000         # Total number of epochs for training
-LEARNING_RATE = 1e-3  # Learning rate for the optimizer
+LEARNING_RATE = 1e-4  # Learning rate for the optimizer
 
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
