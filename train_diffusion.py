@@ -76,8 +76,8 @@ def train():
 	# Initialize the diffusion policy model.
 	model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM)
 	
-	# Use the AdamW optimizer with the learning rate specified in config.
-	optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+	# Use the Adam optimizer with the learning rate specified in config.
+	optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 	
 	# Mean Squared Error loss will measure the difference between predicted noise and actual noise.
 	mse_loss = nn.MSELoss()
@@ -142,6 +142,12 @@ def train():
 		# This will help you visualize the distribution of weights and monitor their evolution.
 		for name, param in model.named_parameters():
 			writer.add_histogram(name, param, epoch+1)
+
+		# Log gradient norms for each parameter.
+		for name, param in model.named_parameters():
+			if param.grad is not None:
+				grad_norm = param.grad.data.norm(2).item()
+				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
 		
 		# Write the epoch number and average loss to the CSV file.
 		csv_writer.writerow([epoch+1, avg_loss])
