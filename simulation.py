@@ -28,14 +28,13 @@ class Simulation:
 	  - It uses the diffusion policy to generate an EE target based on the desired T pose.
 	  - The generated target (diffusion_action) is logged.
 	"""
-	def __init__(self, mode="collection", input_provider=None):
+	def __init__(self, mode="collection"):
 		self.mode = mode  # Mode can be "collection" or "inference"
 		pygame.init()
 		self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 		pygame.display.set_caption("Push T Simulation")
 		self.clock = pygame.time.Clock()
 		self.font = pygame.font.SysFont("Arial", 20)
-		self.input_provider = input_provider  # Optional external input provider.
 		
 		# Initialize simulation objects.
 		self.arm = ArmNR(BASE_POS, LINK_LENGTHS)
@@ -110,10 +109,7 @@ class Simulation:
 			# Sample an EE action from the diffusion policy.
 			return self.policy_inference.sample_action(condition)
 		else:
-			if self.input_provider is not None:
-				return self.input_provider()
-			else:
-				return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
+			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
 
 	def draw_goal_T(self):
 		"""
