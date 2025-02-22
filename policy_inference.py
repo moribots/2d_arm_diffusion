@@ -8,27 +8,28 @@ class DiffusionPolicyInference:
 	def __init__(self, model_path="diffusion_policy.pth", T=1000, device=None):
 		self.T = T
 		self.device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
-		self.model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE).to(self.device)
+		# Instantiate the model with the updated window size.
+		self.model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1).to(self.device)
 		self.model.load_state_dict(torch.load(model_path, map_location=self.device))
 		self.model.eval()
 		self.betas = get_beta_schedule(self.T).to(self.device)
 		self.alphas, self.alphas_cumprod = compute_alphas(self.betas)
 		self.alphas = self.alphas.to(self.device)
 		self.alphas_cumprod = self.alphas_cumprod.to(self.device)
-		
+
 	@torch.no_grad()
 	def sample_action(self, condition):
 		"""
 		Generate a sample EE action given a conditioning signal using the reverse diffusion process.
+		
 		The reverse (denoising) process follows:
 		
 		$$ x_{t-1} = \\frac{1}{\\sqrt{\\alpha_t}} \\left( x_t - \\frac{1-\\alpha_t}{\\sqrt{1-\\bar{\\alpha}_t}} \\epsilon_\\theta(x_t,t,c) \\right) + \\sqrt{\\beta_t} z $$
 		
 		where \\( z \\sim \\mathcal{N}(0,I) \\) (for \\(t > 1\\)).
 		"""
-		# Start with pure Gaussian noise with the correct shape (batch=1, WINDOW_SIZE, ACTION_DIM).
-		x_t = torch.randn((1, WINDOW_SIZE, ACTION_DIM), device=self.device)
-		# Reverse diffusion loop.
+		# Start with pure Gaussian noise with shape (batch=1, WINDOW_SIZE+1, ACTION_DIM).
+		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
 		for t in reversed(range(1, self.T)):
 			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
 			alpha_t = self.alphas[t]
@@ -44,6 +45,5 @@ class DiffusionPolicyInference:
 				z = torch.randn_like(x_t)
 				x_prev = x_prev + torch.sqrt(beta_t) * z
 			x_t = x_prev
-		# Changed: Instead of using einops.rearrange, return the last action in the window.
 		return x_t[0, -1, :]  # Return tensor of shape (ACTION_DIM,)
 

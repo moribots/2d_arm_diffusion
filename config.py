@@ -46,7 +46,7 @@ WINDOW_SIZE = 14  # Number of consecutive action timestamps to form the sequence
 
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
-CONDITION_DIM = 6   # Now a 6D vector: [goal_x, goal_y, goal_theta, current_x, current_y, current_theta].
+CONDITION_DIM = 9 # 9D vector: [goal_x, goal_y, goal_theta, prev_T_x, prev_T_y, prev_T_theta, curr_T_x, curr_T_y, curr_T_theta].
 
 # Directory for saving training data
 TRAINING_DATA_DIR = "training_data"
