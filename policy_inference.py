@@ -2,13 +2,13 @@ import torch
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
 from einops import rearrange
-from config import ACTION_DIM, CONDITION_DIM
+from config import ACTION_DIM, CONDITION_DIM, WINDOW_SIZE  # WINDOW_SIZE imported here
 
 class DiffusionPolicyInference:
 	def __init__(self, model_path="diffusion_policy.pth", T=1000, device=None):
 		self.T = T
 		self.device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
-		self.model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM).to(self.device)
+		self.model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE).to(self.device)
 		self.model.load_state_dict(torch.load(model_path, map_location=self.device))
 		self.model.eval()
 		self.betas = get_beta_schedule(self.T).to(self.device)
@@ -26,8 +26,8 @@ class DiffusionPolicyInference:
 		
 		where \\( z \\sim \\mathcal{N}(0,I) \\) (for \\(t > 1\\)).
 		"""
-		# Start with pure Gaussian noise.
-		x_t = torch.randn((1, 2), device=self.device)
+		# Start with pure Gaussian noise with the correct shape (batch=1, WINDOW_SIZE, ACTION_DIM).
+		x_t = torch.randn((1, WINDOW_SIZE, ACTION_DIM), device=self.device)
 		# Reverse diffusion loop.
 		for t in reversed(range(1, self.T)):
 			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
@@ -44,4 +44,6 @@ class DiffusionPolicyInference:
 				z = torch.randn_like(x_t)
 				x_prev = x_prev + torch.sqrt(beta_t) * z
 			x_t = x_prev
-		return rearrange(x_t, '1 d -> d')  # Return tensor of shape (2,)
+		# Changed: Instead of using einops.rearrange, return the last action in the window.
+		return x_t[0, -1, :]  # Return tensor of shape (ACTION_DIM,)
+
