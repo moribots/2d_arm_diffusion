@@ -1,6 +1,30 @@
 import torch
 from einops import rearrange
 import torch.nn as nn
+import torch.nn.functional as F
+
+class ResidualMLPBlock(nn.Module):
+	"""
+	A residual block for MLPs that applies layer normalization,
+	a hidden linear transformation with GELU activation, dropout, and a residual connection.
+	"""
+	def __init__(self, in_features, hidden_features, dropout=0.0):
+		super().__init__()
+		self.norm = nn.LayerNorm(in_features)
+		self.fc1 = nn.Linear(in_features, hidden_features)
+		self.activation = nn.GELU()
+		self.fc2 = nn.Linear(hidden_features, in_features)
+		self.dropout = nn.Dropout(dropout)
+	
+	def forward(self, x):
+		residual = x
+		x = self.norm(x)
+		x = self.fc1(x)
+		x = self.activation(x)
+		x = self.dropout(x)
+		x = self.fc2(x)
+		x = self.dropout(x)
+		return x + residual
 
 class DiffusionPolicy(nn.Module):
 	def __init__(self, action_dim, condition_dim, time_embed_dim=128):
@@ -10,6 +34,11 @@ class DiffusionPolicy(nn.Module):
 		This network is used in the reverse diffusion process to predict the noise that
 		was added to an action sample. In our project, the action is the end-effector (EE)
 		position (a 2D vector), and the condition is the desired object pose [x, y, theta].
+
+		- GELU activations instead of ReLU for smoother gradients.
+		- A time embedding MLP that converts the scalar timestep into a higher-dimensional vector.
+		- Residual blocks with layer normalization to improve gradient flow.
+		 
 
 		Parameters:
 		- action_dim (int): 2
@@ -31,24 +60,27 @@ class DiffusionPolicy(nn.Module):
 		# into a higher-dimensional vector (the time embedding). This embedding allows the network
 		# to modulate its behavior based on how much noise has been added.
 		self.time_embed = nn.Sequential(
-			nn.Linear(1, time_embed_dim),  # Embed the scalar timestep into a vector.
-			nn.ReLU(),
-			nn.Linear(time_embed_dim, time_embed_dim),  # Process further to capture complex patterns.
+			nn.Linear(1, time_embed_dim),
+			nn.GELU(),
+			nn.Linear(time_embed_dim, time_embed_dim),
+			nn.GELU()
 		)
 
 		# Main Network:
-		# The main network is an MLP that takes as input the concatenation of:
+		# Takes as input the concatenation of:
 		# - the noised action sample (x),
 		# - the conditioning signal (desired T pose),
 		# - the time embedding.
 		# This combined vector is processed to predict the noise added to the action sample.
-		self.model = nn.Sequential(
-			nn.Linear(action_dim + condition_dim + time_embed_dim, 256),
-			nn.ReLU(),
-			nn.Linear(256, 256),
-			nn.ReLU(),
-			nn.Linear(256, action_dim)  # Output matches the action dimension.
-		)
+
+		# Instead of a simple MLP, we use an initial linear layer followed by residual MLP blocks.
+		# Input dimension = action_dim + condition_dim + time_embed_dim.
+		in_features = action_dim + condition_dim + time_embed_dim
+		self.fc_initial = nn.Linear(in_features, 256)
+		self.res_block1 = ResidualMLPBlock(256, 256, dropout=0.1)
+		self.res_block2 = ResidualMLPBlock(256, 256, dropout=0.1)
+		# Final output layer maps to action_dim.
+		self.fc_out = nn.Linear(256, action_dim)
 
 	def forward(self, x, t, condition):
 		"""
@@ -80,14 +112,18 @@ class DiffusionPolicy(nn.Module):
 		Returns:
 		- noise_pred: The predicted noise vector of shape (batch, action_dim).
 		"""
-		# Reshape timestep tensor to (batch, 1).
+
+		# Reshape t to (batch, 1)
 		t = rearrange(t, 'b -> b 1').float()
 		# Obtain the time embedding for the given timestep.
-		t_emb = self.time_embed(t)  # Shape: (batch, time_embed_dim)
+		t_emb = self.time_embed(t)  # (batch, time_embed_dim)
 		# Concatenate the noised action x, the condition (desired T pose), and the time embedding.
 		# Could not use einops here because each of the tensors have different dimensions.
-		x_in = torch.cat([x, condition, t_emb], dim=-1)
-
-		# Forward pass through the MLP.
-		noise_pred = self.model(x_in)  # Shape: (batch, action_dim)
+		x_in = torch.cat([x, condition, t_emb], dim=-1)  # (batch, action_dim + condition_dim + time_embed_dim)
+		
+		x = self.fc_initial(x_in)
+		x = F.gelu(x)
+		x = self.res_block1(x)
+		x = self.res_block2(x)
+		noise_pred = self.fc_out(x)
 		return noise_pred
