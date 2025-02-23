@@ -22,28 +22,72 @@ class DiffusionPolicyInference:
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.no_grad()
-	def sample_action(self, state, image):
+	def sample_action(self, state, image, num_ddim_steps=50):
 		"""
-		Generate a sample EE action given a conditioning state and image using the reverse diffusion process.
-		After the reverse diffusion process, the predicted action (still in the normalized space)
-		is un-normalized using the stored normalization statistics.
+		Generate a sample EE action using DDIM sampling (Denoising Diffusion Implicit Models) with reduced steps.
+		
+		DDIM is a deterministic sampling method derived from diffusion models that allows for much faster inference.
+		Instead of iterating over all T diffusion timesteps (e.g., 1000), DDIM uses a reduced set of timesteps 
+		(num_ddim_steps, e.g., 50) to approximate the reverse diffusion process.
+		
+		The key steps in DDIM are:
+		1. From the current noisy sample x_t and predicted noise (epsilon) from the model, predict the original signal:
+			x0_pred = (x_t - sqrt(1 - alpha_bar_t) * epsilon) / sqrt(alpha_bar_t)
+			where alpha_bar_t is the cumulative product of alphas at time t (a measure of the noise level).
+		2. Update the sample using:
+			x_t_next = sqrt(alpha_bar_t_next) * x0_pred + sqrt(1 - alpha_bar_t_next) * epsilon
+			where alpha_bar_t_next corresponds to the next timestep.
+		
+		For numerical stability:
+		- A small constant (eps) is added to denominators.
+		- Intermediate x0_pred and x_t values are clamped to a fixed range.
+		
+		Parameters:
+		state: Conditioning state tensor of shape (1, 4) representing the EE positions at t-1 and t.
+		image: Conditioning image tensor of shape (1, 3, IMG_RES, IMG_RES).
+		num_ddim_steps: The number of DDIM steps to use for sampling (default is 50).
+
+		Returns:
+		A tensor of shape (ACTION_DIM,) containing the unnormalized EE action.
 		"""
-		eps = 1e-8  # Small constant to avoid division by zero
+		import numpy as np
+		eps = 1e-5  # Small constant for numerical stability
+		# Initialize x_t as random noise.
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
-		for t in reversed(range(1, self.T)):
-			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
-			alpha_t = rearrange(self.alphas[t:t+1], 'b -> b 1 1')
-			alpha_bar_t = rearrange(self.alphas_cumprod[t:t+1], 'b -> b 1 1')
-			beta_t = rearrange(self.betas[t:t+1], 'b -> b 1 1')
+		
+		# Create a reduced set of timesteps for DDIM sampling (from high noise to low noise)
+		ddim_timesteps = np.linspace(0, self.T - 1, num_ddim_steps, dtype=int)
+		ddim_timesteps = list(ddim_timesteps)[::-1]  # e.g., from T-1 down to 0
+		
+		# For deterministic sampling, set eta = 0 (no additional noise is added)
+		eta = 0.0
+
+		# DDIM sampling loop over the reduced timesteps.
+		for i in range(len(ddim_timesteps) - 1):
+			t = ddim_timesteps[i]
+			t_next = ddim_timesteps[i+1]
+			t_tensor = torch.tensor([t], device=self.device).float()  # current timestep as tensor
+			
+			# Get the cumulative product of alphas for current timestep.
+			alpha_bar_t = self.alphas_cumprod[t].view(1, 1, 1)
+			
+			# Predict noise epsilon at current timestep using the diffusion model.
 			eps_pred = self.model(x_t, t_tensor, state, image)
-			coef = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t + eps)
-			# Use the epsilon in the denominator to avoid division by zero
-			x_prev = (x_t - coef * eps_pred) / torch.sqrt(alpha_t + eps)
-			if t > 1:
-				z = torch.randn_like(x_t)
-				x_prev = x_prev + torch.sqrt(beta_t + eps) * z
-			x_t = x_prev
-		pred_normalized = x_t[0, -1, :]  # (ACTION_DIM,)
+			
+			# Predict the original signal x0 from the noisy sample x_t and the predicted noise.
+			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t + eps)
+			# Clamp x0_pred to a fixed range to avoid extreme values.
+			x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+			
+			# Get the cumulative product of alphas for the next timestep.
+			alpha_bar_t_next = self.alphas_cumprod[t_next].view(1, 1, 1)
+			
+			# DDIM update rule: update x_t using the predicted x0 and epsilon.
+			x_t = torch.sqrt(alpha_bar_t_next) * x0_pred + torch.sqrt(1 - alpha_bar_t_next) * eps_pred
+			# Clamp x_t to prevent numerical explosion.
+			x_t = torch.clamp(x_t, -10.0, 10.0)
+		
+		# Final predicted action is taken from the last frame in the window.
+		pred_normalized = x_t[0, -1, :]  # shape: (ACTION_DIM,)
 		pred = self.normalize.unnormalize_action(pred_normalized)
 		return pred
-
