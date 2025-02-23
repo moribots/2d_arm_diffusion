@@ -127,7 +127,7 @@ class Simulation:
 		Get the target position.
 		
 		In inference mode:
-		  - Build the condition as a combination of state and image.
+		  - Build the condition as a combination of the EE positions at t-1 and t, and the current screen image.
 		  - Use the diffusion policy to generate an EE action every 0.1 seconds (action hold).
 		  - Hold the action for intermediate frames.
 		
@@ -136,16 +136,24 @@ class Simulation:
 		"""
 		if self.mode == "inference":
 			current_time = time.time()
-			if (current_time - self.last_diffusion_update_time) >= 0.1 or self.last_diffusion_action is None:
-				# Build state condition from object pose (duplicated as in original code)
-				state = torch.tensor(list(self.object.pose) + list(self.object.pose), dtype=torch.float32).unsqueeze(0)
-				# Capture current image from the simulation
+			if (current_time - self.last_diffusion_update_time) >= SEC_PER_SAMPLE or self.last_diffusion_action is None:
+				# Build state condition from EE positions at t-1 and t.
+				# Use the current end-effector position from forward kinematics.
+				current_ee = self.arm.forward_kinematics()
+				# If no previous EE position exists, duplicate the current one.
+				if self.prev_ee_pos is None:
+					state = torch.cat([current_ee, current_ee], dim=0)
+				else:
+					state = torch.cat([self.prev_ee_pos, current_ee], dim=0)
+				state = state.unsqueeze(0)  # shape (1, 4)
+				# Capture the current image from the simulation
 				image = self.get_current_image_tensor()  # shape: (1, 3, IMG_RES, IMG_RES)
 				self.last_diffusion_action = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
 			return self.last_diffusion_action
 		else:
 			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
+
 
 	def draw_goal_T(self):
 		"""
