@@ -2,7 +2,7 @@ import torch
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
 from einops import rearrange
-from config import ACTION_DIM, CONDITION_DIM, WINDOW_SIZE  # WINDOW_SIZE imported here
+from config import ACTION_DIM, CONDITION_DIM, WINDOW_SIZE
 from normalize import Normalize  # New Normalize class
 
 class DiffusionPolicyInference:
@@ -22,32 +22,25 @@ class DiffusionPolicyInference:
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.no_grad()
-	def sample_action(self, condition):
+	def sample_action(self, state, image):
 		"""
-		Generate a sample EE action given a conditioning signal using the reverse diffusion process.
-		
-		The reverse (denoising) process follows:
-		
-		$$ x_{t-1} = \\frac{1}{\\sqrt{\\alpha_t}} \\left( x_t - \\frac{1-\\alpha_t}{\\sqrt{1-\\bar{\\alpha}_t}} \\epsilon_\\theta(x_t,t,c) \\right) + \\sqrt{\\beta_t} z $$
-		
-		where \\( z \\sim \\mathcal{N}(0,I) \\) (for \\(t > 1\\)).
-		
+		Generate a sample EE action given a conditioning state and image using the reverse diffusion process.
 		After the reverse diffusion process, the predicted action (still in the normalized space)
 		is un-normalized using the stored normalization statistics.
 		"""
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
 		for t in reversed(range(1, self.T)):
-			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
+			t_tensor = torch.tensor([t], device=self.device).float()
 			alpha_t = rearrange(self.alphas[t:t+1], 'b -> b 1 1')
 			alpha_bar_t = rearrange(self.alphas_cumprod[t:t+1], 'b -> b 1 1')
 			beta_t = rearrange(self.betas[t:t+1], 'b -> b 1 1')
-			eps_pred = self.model(x_t, t_tensor, condition)
+			eps_pred = self.model(x_t, t_tensor, state, image)
 			coef = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t)
 			x_prev = torch.einsum("bij,bij->bij", (1 / torch.sqrt(alpha_t)).expand_as(x_t), (x_t - coef * eps_pred))
 			if t > 1:
 				z = torch.randn_like(x_t)
 				x_prev = x_prev + torch.sqrt(beta_t) * z
 			x_t = x_prev
-		pred_normalized = x_t[0, -1, :]  # (ACTION_DIM,)
+		pred_normalized = x_t[0, -1, :]
 		pred = self.normalize.unnormalize_action(pred_normalized)
 		return pred
