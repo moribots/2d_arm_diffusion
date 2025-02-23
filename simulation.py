@@ -58,6 +58,9 @@ class Simulation:
 		self.last_diffusion_actions = None
 		self.last_diffusion_update_time = 0.0
 		
+		# Flag to indicate when realistic data logging starts (after arm initialization).
+		self.session_initialized = False  # new flag for skipping initial unrealistic data
+		
 		# Create a directory for images.
 		self.images_dir = os.path.join(TRAINING_DATA_DIR, "images")
 		os.makedirs(self.images_dir, exist_ok=True)
@@ -110,6 +113,7 @@ class Simulation:
 		self.prev_ee_pos = None
 		self.last_diffusion_actions = None
 		self.last_diffusion_update_time = 0.0
+		self.session_initialized = False  # reset initialization flag
 		print("New push session started.")
 
 	def get_current_image_tensor(self):
@@ -155,20 +159,14 @@ class Simulation:
 				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
 			
-			print(f'current_ee: {current_ee}')
-			print(f'prev_ee_pos: {self.prev_ee_pos}')
-			print(f'Last diffusion actions shape: {len(self.last_diffusion_actions)}')
-			print(f'Diffusion action buffer: {self.last_diffusion_actions}')
 			# Pop the first action from the buffer to execute this tick
 			target = self.last_diffusion_actions[0]
 			# Remove the executed action from the buffer
 			self.last_diffusion_actions = self.last_diffusion_actions[1:]
-			print(f'Diffusion action: {target}')
-			print(f'Diffusion action shape: {target.shape}')
 			return target
 		else:
+			# In collection mode, use mouse input.
 			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
-
 
 	def draw_goal_T(self):
 		"""
@@ -274,31 +272,58 @@ class Simulation:
 				pygame.draw.circle(capture_surface, (0, 200, 0),
 								   (int(target[0].item()), int(target[1].item())), 6)
 				timestamp = time.time() - self.session_start_time
-				img_filename = f"frame_{timestamp:.3f}.png"
+				
+				# Ensure unique image filenames to avoid duplicates
+				base_filename = f"frame_{timestamp:.3f}"
+				img_filename = base_filename + ".png"
+				counter = 1
 				full_img_path = os.path.join(self.images_dir, img_filename)
+				while os.path.exists(full_img_path):
+					img_filename = f"{base_filename}_{counter}.png"
+					full_img_path = os.path.join(self.images_dir, img_filename)
+					counter += 1
 				capture_image = pygame.transform.scale(capture_surface, (IMG_RES, IMG_RES))
 				pygame.image.save(capture_image, full_img_path)
+				
 				log_entry = {
 					"time": timestamp,
 					"goal_pose": self.goal_pose.tolist(),
 					"T_pose": self.object.pose.tolist(),
 					"EE_pos": ee.tolist(),
-					"image": img_filename
+					"image": img_filename  # Save image filename
 				}
 				if self.mode == "inference":
 					log_entry["diffusion_action"] = target.tolist()
 				else:
 					log_entry["action"] = target.tolist()
+				# Also log the IK error for debugging purposes.
 				log_entry["ik_error"] = ik_error
-				if not self.demo_data or (timestamp - self.demo_data[-1]["time"]) >= SEC_PER_SAMPLE:
-					self.demo_data.append(log_entry)
+				
+				# Skip logging unrealistic data:
+				# Do not log frames from arm initialization until the EE snaps to the target (mouse position)
+				# Threshold set to 10.0 for EE proximity to target.
+				if self.mode != "inference":
+					if not self.session_initialized:
+						if torch.norm(ee - target) > 10.0:
+							# Skip logging this frame because EE has not yet snapped to the target.
+							#print("Skipping logging: waiting for EE to snap to target.")
+							pass  # Do not append log entry
+						else:
+							self.session_initialized = True
+							print(f'Session initialized. Logging started at {timestamp:.3f} seconds.')
+							if not self.demo_data or (timestamp - self.demo_data[-1]["time"]) >= SEC_PER_SAMPLE:
+								self.demo_data.append(log_entry)
+					else:
+						if not self.demo_data or (timestamp - self.demo_data[-1]["time"]) >= SEC_PER_SAMPLE:
+							self.demo_data.append(log_entry)
+				
 				pos_error = torch.norm(self.object.pose[:2] - self.goal_pose[:2]).item()
 				orient_error = abs(angle_diff(self.object.pose[2], self.goal_pose[2]))
 				if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
 					print("T object reached desired pose. Session complete.")
 					training_examples = []
 					if len(self.demo_data) >= DEMO_DATA_FRAMES:
-						for i in range(1, len(self.demo_data) - 14):
+						for i in range(1, len(self.demo_data) - WINDOW_SIZE):
 							obs = {
 								"image": [
 									self.demo_data[i - 1]["image"],
@@ -310,18 +335,25 @@ class Simulation:
 								]
 							}
 							actions = []
-							for j in range(i - 1, i + 15):
+							for j in range(i - 1, i + WINDOW_SIZE+1):
 								key = "diffusion_action" if self.mode == "inference" else "action"
 								actions.append(self.demo_data[j][key])
 							training_examples.append({
 								"observation": obs,
 								"action": actions
 							})
-					filename = os.path.join(TRAINING_DATA_DIR, f"session_{int(time.time())}_training.json")
+					# Ensure unique training data filenames to avoid duplicates
+					base_filename = f"session_{int(time.time())}_training"
+					filename = os.path.join(TRAINING_DATA_DIR, base_filename + ".json")
+					counter = 1
+					while os.path.exists(filename):
+						filename = os.path.join(TRAINING_DATA_DIR, f"{base_filename}_{counter}.json")
+						counter += 1
 					with open(filename, "w") as f:
 						json.dump(training_examples, f, indent=2)
 					print(f"Training session data saved to {filename}.")
 					self.session_active = False
+			
 			else:
 				text = self.font.render("Press [N] to start a new push session", True, (0, 0, 0))
 				self.screen.blit(text, (20, 20))
