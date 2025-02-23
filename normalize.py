@@ -38,7 +38,7 @@ class Normalize:
             actions_list.append(act)
         conditions_cat = torch.stack(conditions, dim=0)  # (num_samples, 4)
         condition_mean = conditions_cat.mean(dim=0)
-        condition_std = conditions_cat.std(dim=0) + 1e-6  # avoid division by zero
+        condition_std = conditions_cat.std(dim=0, unbiased=False) + 1e-6  # avoid division by zero
 
         actions_cat = torch.cat(actions_list, dim=0)  # (total_timesteps, action_dim)
         action_mean = actions_cat.mean(dim=0)
