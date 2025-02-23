@@ -54,8 +54,8 @@ class Simulation:
 		self.smoothed_target = None
 		self.prev_ee_pos = None
 		
-		# For inference mode: hold generated diffusion action for 0.1 sec.
-		self.last_diffusion_action = None
+		# For inference mode: hold generated diffusion action for SEC_PER_SAMPLE sec.
+		self.last_diffusion_actions = None
 		self.last_diffusion_update_time = 0.0
 		
 		# Create a directory for images.
@@ -108,7 +108,7 @@ class Simulation:
 		self.object.angular_velocity = 0.0
 		self.smoothed_target = None
 		self.prev_ee_pos = None
-		self.last_diffusion_action = None
+		self.last_diffusion_actions = None
 		self.last_diffusion_update_time = 0.0
 		print("New push session started.")
 
@@ -124,34 +124,46 @@ class Simulation:
 
 	def get_target_input(self):
 		"""
-		Get the target position.
-		
+		Get the target position for the current simulation tick.
+
 		In inference mode:
-		  - Build the condition as a combination of the EE positions at t-1 and t, and the current screen image.
-		  - Use the diffusion policy to generate an EE action every 0.1 seconds (action hold).
-		  - Hold the action for intermediate frames.
+		- If the buffer of predicted actions is empty or if it's time to resample,
+			build the state (from the last two end-effector positions) and capture the current image.
+		- Call the diffusion policy to obtain a full predicted sequence of actions.
+		- Store this sequence in a buffer and then pop the first action from the buffer to use as the target.
 		
 		In collection mode:
-		  - Use an external input provider (mouse position).
+		- Use the mouse position.
 		"""
 		if self.mode == "inference":
 			current_time = time.time()
-			if (current_time - self.last_diffusion_update_time) >= SEC_PER_SAMPLE or self.last_diffusion_action is None:
-				# Build state condition from EE positions at t-1 and t.
-				# Use the current end-effector position from forward kinematics.
+			# If no actions are buffered or it's time to generate a new sequence, sample a new prediction.
+			if (self.last_diffusion_actions is None or len(self.last_diffusion_actions) == 0 or
+				(current_time - self.last_diffusion_update_time) >= SEC_PER_SAMPLE):
+				
+				# Build state condition from EE positions (using t-1 and t)
 				current_ee = self.arm.forward_kinematics()
-				# If no previous EE position exists, duplicate the current one.
 				if self.prev_ee_pos is None:
-					state = torch.cat([current_ee, current_ee], dim=0)
+					state = torch.cat([current_ee, current_ee], dim=0).unsqueeze(0)  # shape (1,4)
 				else:
-					state = torch.cat([self.prev_ee_pos, current_ee], dim=0)
-				state = state.unsqueeze(0)  # shape (1, 4)
+					state = torch.cat([self.prev_ee_pos, current_ee], dim=0).unsqueeze(0)
+				
 				# Capture the current image from the simulation
-				image = self.get_current_image_tensor()  # shape: (1, 3, IMG_RES, IMG_RES)
-				self.last_diffusion_action = self.policy_inference.sample_action(state, image)
+				image = self.get_current_image_tensor()  # shape (1, 3, IMG_RES, IMG_RES)
+				
+				# Generate the full predicted sequence of actions and store in the buffer
+				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
-				print(f"Diffusion action generated: {self.last_diffusion_action}")
-			return self.last_diffusion_action
+			
+			print(f'Last diffusion actions shape: {len(self.last_diffusion_actions)}')
+			print(f'Diffusion action buffer: {self.last_diffusion_actions}')
+			# Pop the first action from the buffer to execute this tick
+			target = self.last_diffusion_actions[0]
+			# Remove the executed action from the buffer
+			self.last_diffusion_actions = self.last_diffusion_actions[1:]
+			print(f'Diffusion action: {target}')
+			print(f'Diffusion action shape: {target.shape}')
+			return target
 		else:
 			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
 

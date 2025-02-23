@@ -48,7 +48,8 @@ class DiffusionPolicyInference:
 		num_ddim_steps: The number of DDIM steps to use for sampling (default is 50).
 
 		Returns:
-		A tensor of shape (ACTION_DIM,) containing the unnormalized EE action.
+		A tensor of shape (window_size, action_dim) representing the denoised action sequence.
+
 		"""
 		import numpy as np
 		eps = 1e-5  # Small constant for numerical stability
@@ -87,7 +88,8 @@ class DiffusionPolicyInference:
 			# Clamp x_t to prevent numerical explosion.
 			x_t = torch.clamp(x_t, -10.0, 10.0)
 		
-		# Final predicted action is taken from the last frame in the window.
-		pred_normalized = x_t[0, -1, :]  # shape: (ACTION_DIM,)
-		pred = self.normalize.unnormalize_action(pred_normalized)
-		return pred
+		# return the full sequence except for the t-1th action.
+		print("Raw x_t shape:", x_t.shape)
+		predicted_sequence_normalized = x_t[0, 1:, :]  # Shape: (WINDOW_SIZE+1, ACTION_DIM)
+		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
+		return predicted_sequence
