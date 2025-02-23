@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-from einops import rearrange  # new import for einops
+from torchvision.models import resnet18, ResNet18_Weights
+from einops import rearrange
 
 class VisualEncoder(nn.Module):
 	"""
@@ -15,7 +16,7 @@ class VisualEncoder(nn.Module):
 	def __init__(self):
 		super(VisualEncoder, self).__init__()
 		# Load pretrained ResNet18 backbone
-		resnet = models.resnet18(pretrained=True)
+		resnet = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
 		# Use all layers except the fully connected layer
 		self.feature_extractor = nn.Sequential(*list(resnet.children())[:-2])  # Output shape: (B, 512, H, W)
 		
@@ -33,7 +34,8 @@ class VisualEncoder(nn.Module):
 		# Create coordinate grid
 		pos_x, pos_y = torch.meshgrid(
 			torch.linspace(-1.0, 1.0, W, device=feature_map.device),
-			torch.linspace(-1.0, 1.0, H, device=feature_map.device)
+			torch.linspace(-1.0, 1.0, H, device=feature_map.device),
+			indexing='ij'
 		)
 		pos_x = pos_x.t().reshape(1, 1, H, W)
 		pos_y = pos_y.t().reshape(1, 1, H, W)
