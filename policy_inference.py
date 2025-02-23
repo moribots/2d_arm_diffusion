@@ -28,19 +28,22 @@ class DiffusionPolicyInference:
 		After the reverse diffusion process, the predicted action (still in the normalized space)
 		is un-normalized using the stored normalization statistics.
 		"""
+		eps = 1e-8  # Small constant to avoid division by zero
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
 		for t in reversed(range(1, self.T)):
-			t_tensor = torch.tensor([t], device=self.device).float()
+			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
 			alpha_t = rearrange(self.alphas[t:t+1], 'b -> b 1 1')
 			alpha_bar_t = rearrange(self.alphas_cumprod[t:t+1], 'b -> b 1 1')
 			beta_t = rearrange(self.betas[t:t+1], 'b -> b 1 1')
 			eps_pred = self.model(x_t, t_tensor, state, image)
-			coef = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t)
-			x_prev = torch.einsum("bij,bij->bij", (1 / torch.sqrt(alpha_t)).expand_as(x_t), (x_t - coef * eps_pred))
+			coef = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t + eps)
+			# Use the epsilon in the denominator to avoid division by zero
+			x_prev = (x_t - coef * eps_pred) / torch.sqrt(alpha_t + eps)
 			if t > 1:
 				z = torch.randn_like(x_t)
-				x_prev = x_prev + torch.sqrt(beta_t) * z
+				x_prev = x_prev + torch.sqrt(beta_t + eps) * z
 			x_t = x_prev
-		pred_normalized = x_t[0, -1, :]
+		pred_normalized = x_t[0, -1, :]  # (ACTION_DIM,)
 		pred = self.normalize.unnormalize_action(pred_normalized)
 		return pred
+

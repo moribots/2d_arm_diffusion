@@ -150,6 +150,7 @@ class Simulation:
 				image = self.get_current_image_tensor()  # shape: (1, 3, IMG_RES, IMG_RES)
 				self.last_diffusion_action = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
+				print(f"Diffusion action generated: {self.last_diffusion_action}")
 			return self.last_diffusion_action
 		else:
 			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
