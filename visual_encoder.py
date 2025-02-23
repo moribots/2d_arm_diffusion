@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+from einops import rearrange  # new import for einops
 
 class VisualEncoder(nn.Module):
 	"""
@@ -10,12 +11,6 @@ class VisualEncoder(nn.Module):
 	- Uses a pretrained ResNet18 backbone.
 	- Applies a 1x1 convolution to reduce the channel dimension to 16.
 	- Applies spatial softmax to obtain 2D keypoint coordinates per channel, resulting in 32-dimensional output.
-
-	Inspired by the LeRobot implementation and the paper "Spatial Softmax for Visual Attention" (https://arxiv.org/abs/1706.03762).
-	- The output is a tensor of shape (B, 32), where B is the batch size.
-	- The spatial softmax is applied to the feature map to obtain expected x and y coordinates for each channel.
-	- The output is used as part of the conditioning input for the diffusion policy model.
-	- The model is designed to work with images of size (3, IMG_RES, IMG_RES).
 	"""
 	def __init__(self):
 		super(VisualEncoder, self).__init__()
@@ -36,18 +31,20 @@ class VisualEncoder(nn.Module):
 		"""
 		B, C, H, W = feature_map.size()
 		# Create coordinate grid
-		pos_x, pos_y = torch.meshgrid(torch.linspace(-1.0, 1.0, W, device=feature_map.device),
-									  torch.linspace(-1.0, 1.0, H, device=feature_map.device))
+		pos_x, pos_y = torch.meshgrid(
+			torch.linspace(-1.0, 1.0, W, device=feature_map.device),
+			torch.linspace(-1.0, 1.0, H, device=feature_map.device)
+		)
 		pos_x = pos_x.t().reshape(1, 1, H, W)
 		pos_y = pos_y.t().reshape(1, 1, H, W)
 		
-		# Flatten spatial dimensions
+		# Flatten spatial dimensions of feature_map
 		feature_map = feature_map.view(B, C, -1)
 		softmax_attention = F.softmax(feature_map, dim=-1)
 		
-		# Reshape coordinate grids to (1, 1, H*W)
-		pos_x = pos_x.view(1, 1, -1)
-		pos_y = pos_y.view(1, 1, -1)
+		# Use einops to reshape coordinate grids to (1, 1, H*W)
+		pos_x = rearrange(pos_x, '1 1 h w -> 1 1 (h w)')
+		pos_y = rearrange(pos_y, '1 1 h w -> 1 1 (h w)')
 		
 		exp_x = torch.sum(softmax_attention * pos_x, dim=-1)
 		exp_y = torch.sum(softmax_attention * pos_y, dim=-1)
