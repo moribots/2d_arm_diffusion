@@ -26,22 +26,28 @@ def polygon_moi(vertices: torch.Tensor, mass: float) -> float:
 	I = density * numerator / 12.0
 	return I
 
-class TObject:
+class Object:
 	"""
-	A T-shaped object that can be pushed by the arm.
+	An L-shaped object that can be pushed by the arm.
 	Contains geometry, drawing, and physics update methods.
 	"""
-	# Define the T shape vertices; then scale and recenter so that the centroid is at the origin.
+	# Define the L shape vertices; then scale and recenter so that the centroid is at the origin.
+	# This L shape is formed by a narrow vertical bar on the left and a horizontal bar at the bottom.
+	# Vertices (in counterclockwise order):
+	#   (-30, -40): top-left of vertical bar
+	#   (-10, -40): top-right of vertical bar
+	#   (-10, 20):  bottom-right of vertical bar
+	#   (30, 20):   bottom-right of horizontal bar
+	#   (30, 40):   bottom-right of horizontal bar
+	#   (-30, 40):  bottom-left of horizontal bar
 	T_SCALE = 2.0
 	base_vertices = torch.tensor([
-		[-40.0, -10.0],
-		[40.0, -10.0],
-		[40.0, 10.0],
-		[10.0, 10.0],
-		[10.0, 70.0],
-		[-10.0, 70.0],
-		[-10.0, 10.0],
-		[-40.0, 10.0]
+		[-30.0, -40.0],
+		[-10.0, -40.0],
+		[-10.0, 20.0],
+		[30.0, 20.0],
+		[30.0, 40.0],
+		[-30.0, 40.0]
 	], dtype=torch.float32)
 	local_vertices = base_vertices * T_SCALE
 	centroid = torch.mean(local_vertices, dim=0)
@@ -52,11 +58,11 @@ class TObject:
 		self.velocity = torch.zeros(2, dtype=torch.float32)
 		self.angular_velocity = 0.0
 		# Compute moment of inertia for rotation dynamics.
-		self.moi = polygon_moi(TObject.local_vertices_adjusted, M_T)
+		self.moi = polygon_moi(Object.local_vertices_adjusted, M_T)
 
 	def get_polygon(self):
 		"""
-		Compute the world coordinates of the T object's polygon by rotating the local vertices
+		Compute the world coordinates of the Y object's polygon by rotating the local vertices
 		and translating by the object's pose. Uses einops to rearrange for a matrix multiply.
 		"""
 		theta = self.pose[2]
@@ -64,7 +70,7 @@ class TObject:
 		sin_t = torch.sin(theta)
 		R = torch.tensor([[cos_t, -sin_t], [sin_t, cos_t]])
 		# Rearranging vertices to shape (2, N) for einsum.
-		vertices = rearrange(TObject.local_vertices_adjusted, "n d -> d n")
+		vertices = rearrange(Object.local_vertices_adjusted, "n d -> d n")
 		# Use einsum to multiply R and vertices.
 		rotated = torch.einsum("ij,jk->ik", R, vertices)
 		rotated = rearrange(rotated, "d n -> n d")
@@ -80,7 +86,7 @@ class TObject:
 		cos_t = torch.cos(theta)
 		sin_t = torch.sin(theta)
 		R = torch.tensor([[cos_t, -sin_t], [sin_t, cos_t]])
-		vertices = rearrange(TObject.local_vertices_adjusted, "n d -> d n")
+		vertices = rearrange(Object.local_vertices_adjusted, "n d -> d n")
 		rotated = torch.einsum("ij,jk->ik", R, vertices)
 		rotated = rearrange(rotated, "d n -> n d")
 		return rotated + pose[:2]
@@ -142,7 +148,7 @@ class TObject:
 
 	def draw(self, surface, joint_radius=8, centroid_radius=4, centroid_color=(0, 0, 0)):
 		"""
-		Draw the T object and its centroid on the given pygame surface.
+		Draw the Y object and its centroid on the given pygame surface.
 		"""
 		polygon = self.get_polygon()
 		pts = [(int(pos[0].item()), int(pos[1].item())) for pos in polygon]

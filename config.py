@@ -7,7 +7,7 @@ BACKGROUND_COLOR = (255, 255, 255)
 
 # Colors
 ARM_COLOR = (50, 100, 200)
-T_COLOR = (200, 50, 50)         # Color for the T object
+T_COLOR = (200, 50, 50)         # Color for the object
 GOAL_T_COLOR = (0, 200, 0)      # Outline color for the goal T
 
 # End-effector parameters
@@ -21,7 +21,7 @@ BASE_POS = torch.tensor([300.0, 300.0], dtype=torch.float32)
 
 # Contact mechanics parameters
 K_CONTACT = 800.0    # Contact stiffness
-M_T = 0.8             # Mass of T object
+M_T = 0.8             # Mass of object
 LINEAR_DAMPING = 1.2  # Linear velocity damping factor
 ANGULAR_DAMPING = 1.0 # Angular velocity damping factor
 K_DAMPING = 10.0      # Damping constant for velocity differences

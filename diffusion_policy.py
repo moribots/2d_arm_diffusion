@@ -52,7 +52,7 @@ class DiffusionPolicy(nn.Module):
 		The network takes as input:
 		- a noised action sample of shape (batch, window_size, action_dim),
 		- the timestep at which the sample is taken,
-		- a conditioning signal (desired object pose and previous/current T poses).
+		- a conditioning signal (desired object pose and previous/current poses).
 
 		Output: an estimate of the noise that was added to the entire window, with shape (batch, window_size, action_dim).
 		"""
@@ -73,7 +73,7 @@ class DiffusionPolicy(nn.Module):
 		# Main Network:
 		# The main network is an MLP that takes as input the concatenation of:
 		# - the flattened noised action sample (x) with shape (batch, window_size * action_dim),
-		# - the conditioning signal (desired T pose) with shape (batch, condition_dim),
+		# - the conditioning signal (desired pose) with shape (batch, condition_dim),
 		# - the time embedding with shape (batch, time_embed_dim).
 		# This combined vector is processed by an initial linear layer, followed by two residual MLP blocks,
 		# and finally mapped to the output predicting the noise for the entire window.
@@ -93,7 +93,7 @@ class DiffusionPolicy(nn.Module):
 			  This represents a temporal window of EE position samples (including the timestep t-1) with added noise.
 		- t: Timestep tensor of shape (batch,). It indicates the diffusion timestep corresponding to the noise level in x.
 		- condition: Conditioning signal tensor of shape (batch, condition_dim).
-					 This represents the desired object pose along with the previous and current T poses.
+					 This represents the desired object pose along with the previous and current poses.
 
 		Process:
 		1. Reshape t to (batch, 1) and convert to float.
