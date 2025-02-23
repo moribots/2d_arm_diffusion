@@ -9,11 +9,20 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter  # For TensorBoard visualization.
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
-from config import TRAINING_DATA_DIR, T, BATCH_SIZE, EPOCHS, LEARNING_RATE, ACTION_DIM, CONDITION_DIM, WINDOW_SIZE
+from config import TRAINING_DATA_DIR, T, BATCH_SIZE, EPOCHS, LEARNING_RATE, ACTION_DIM, CONDITION_DIM, WINDOW_SIZE, IMG_RES
 from einops import rearrange
 from normalize import Normalize  # New normalization helper class
 
-# ------------------------- Dataset Definition -------------------------
+from PIL import Image  # new import for image loading
+import torchvision.transforms as transforms  # new import for image transforms
+
+# Define transform for images
+image_transform = transforms.Compose([
+	transforms.Resize((IMG_RES, IMG_RES)),
+	transforms.ToTensor(),
+	transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
 class PolicyDataset(Dataset):
 	"""
 	PolicyDataset loads training samples from JSON files stored in TRAINING_DATA_DIR.
@@ -24,7 +33,9 @@ class PolicyDataset(Dataset):
 			- "state": list of two states (each a 2D vector, e.g. [[x1,y1], [x2,y2]])
 	  - "action": a list of actions (each a 2D vector) representing the trajectory from t-1 to t+14.
 	
-	The condition is built by flattening the observation["state"] (resulting in 4 numbers).
+	The condition is built by concatenating:
+	  - The flattened observation["state"] (resulting in 4 numbers)
+	  - Image features are extracted via the VisualEncoder branch in the model.
 	Normalization of conditions and actions is handled via the Normalize class.
 	"""
 	def __init__(self, data_dir):
@@ -45,13 +56,21 @@ class PolicyDataset(Dataset):
 
 	def __getitem__(self, idx):
 		sample = self.samples[idx]
-		# Build condition from observation["state"].
+		# Build state condition from observation["state"].
 		if "observation" not in sample or "state" not in sample["observation"]:
 			raise KeyError("Sample must contain observation['state']")
 		state = torch.tensor(sample["observation"]["state"], dtype=torch.float32)  # shape (2,2)
-		condition = state.flatten()  # (4,)
-		# Normalize condition using the Normalize class.
-		condition = self.normalize.normalize_condition(condition)
+		state = state.flatten()  # (4,)
+		state = self.normalize.normalize_condition(state)
+		
+		# Load image from observation["image"]
+		if "observation" not in sample or "image" not in sample["observation"]:
+			raise KeyError("Sample must contain observation['image']")
+		image_files = sample["observation"]["image"]
+		# Use the second image (img_t) as the visual input
+		img_path = os.path.join(TRAINING_DATA_DIR, image_files[1])
+		image = Image.open(img_path).convert("RGB")
+		image = image_transform(image)  # shape (3, IMG_RES, IMG_RES)
 
 		if "action" not in sample:
 			raise KeyError("Sample does not contain 'action'")
@@ -59,20 +78,16 @@ class PolicyDataset(Dataset):
 		if isinstance(action_data[0], (list, tuple)):
 			action = torch.tensor(action_data, dtype=torch.float32)  # (seq_len, action_dim)
 		else:
-			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)  # (1, action_dim)
-		# Normalize action using the Normalize class.
+			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
 		action = self.normalize.normalize_action(action)
-		return condition, action
+		return state, image, action
 
-# ------------------------- Training Loop -------------------------
 def train():
 	print(f"CUDA is available: {torch.cuda.is_available()}")
-	# ------------------------- Visualization and CSV Setup -------------------------
 	writer = SummaryWriter(log_dir="runs/diffusion_policy_training")
 	csv_file = open("training_metrics.csv", "w", newline="")
 	csv_writer = csv.writer(csv_file)
 	csv_writer.writerow(["epoch", "avg_loss"])
-	# -------------------------------------------------------------------------
 	torch.backends.cudnn.benchmark = True
 	dataset = PolicyDataset(TRAINING_DATA_DIR)
 	dataloader = DataLoader(
@@ -82,10 +97,8 @@ def train():
 		num_workers=4,
 		pin_memory=True
 	)
-	# Initialize the diffusion policy model with the updated window size.
 	model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1)
 	optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-	# Use a cosine annealing scheduler to match LeRobot training.
 	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 	mse_loss = nn.MSELoss(reduction="none")
 	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -96,45 +109,32 @@ def train():
 
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
-		for condition, action in dataloader:
-			condition = condition.to(device)  # (batch, 4)
-			action = action.to(device)  # (batch, action_dim) or (batch, seq_len, action_dim)
-
-			# Create a temporal window of actions including t-1.
-			# LeRobot uses a window from t-1 to t+WINDOW_SIZE-1.
+		for state, image, action in dataloader:
+			state = state.to(device)  # (batch, 4)
+			image = image.to(device)  # (batch, 3, IMG_RES, IMG_RES)
+			action = action.to(device)
 			target_length = WINDOW_SIZE + 1
 			if action.ndim == 2:
-				# Duplicate the single action to form a window.
-				action_seq = action.unsqueeze(1).repeat(1, target_length, 1)  # (batch, target_length, action_dim)
+				action_seq = action.unsqueeze(1).repeat(1, target_length, 1)
 			elif action.ndim == 3:
 				seq_len = action.shape[1]
 				if seq_len < target_length:
-					# Pad by repeating the last action.
 					pad = action[:, -1:, :].repeat(1, target_length - seq_len, 1)
 					action_seq = torch.cat([action, pad], dim=1)
 				else:
-					# Truncate if longer than target_length.
 					action_seq = action[:, :target_length, :]
 			else:
 				raise ValueError("Unexpected shape for action tensor")
 
-			# Sample a diffusion timestep 't' for each sample.
 			t = torch.randint(0, T, (action_seq.size(0),), device=device)
-			# Reshape alphas_cumprod[t] to be broadcastable to (batch, target_length, action_dim)
 			alpha_bar = rearrange(alphas_cumprod[t], 'b -> b 1 1')
-			# Generate noise for the entire temporal window.
 			noise = torch.randn_like(action_seq)
-			# Apply the forward diffusion process:
-			# x_t = sqrt(alpha_bar)*x_0 + sqrt(1 - alpha_bar)*noise.
 			x_t = torch.sqrt(alpha_bar) * action_seq + torch.sqrt(1 - alpha_bar) * noise
 
-			# Forward pass through the model.
-			noise_pred = model(x_t, t.float(), condition)
-			# --- Loss Weighting ---
+			noise_pred = model(x_t, t.float(), state, image)
 			weight = torch.sqrt(1 - alpha_bar)
-			loss_elements = mse_loss(noise_pred, noise)  # Shape: (batch, target_length, action_dim)
+			loss_elements = mse_loss(noise_pred, noise)
 			loss = torch.mean(weight * loss_elements)
-			# --- End Loss Weighting --
 
 			optimizer.zero_grad()
 			loss.backward()

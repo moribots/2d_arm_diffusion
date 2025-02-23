@@ -43,9 +43,12 @@ LEARNING_RATE = 1e-3  # Learning rate for the optimizer
 # Set the temporal window size.
 WINDOW_SIZE = 14  # Number of consecutive action timestamps to form the sequence.
 
+# New constant: dimensionality of image features extracted by VisualEncoder using ResNet18 and spatial softmax
+IMAGE_FEATURE_DIM = 32
+
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
-CONDITION_DIM = 4   # Condition is built from the observation state: two 2D states flattened
+CONDITION_DIM = 4 + IMAGE_FEATURE_DIM   # Condition now includes 4 state values and image features (32-dim)
 
 # Temporal Parameters
 FPS = 100
