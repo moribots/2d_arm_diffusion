@@ -31,19 +31,21 @@ class DiffusionPolicyInference:
 		# Start with pure Gaussian noise with shape (batch=1, WINDOW_SIZE+1, ACTION_DIM).
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
 		for t in reversed(range(1, self.T)):
+			# Create a tensor for the current diffusion timestep and reshape for broadcasting using einops.
 			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
-			alpha_t = self.alphas[t]
-			alpha_bar_t = self.alphas_cumprod[t]
-			beta_t = self.betas[t]
+			# Reshape scalars to (1,1,1) using einops.rearrange for proper broadcasting.
+			alpha_t = rearrange(self.alphas[t:t+1], 'b -> b 1 1')
+			alpha_bar_t = rearrange(self.alphas_cumprod[t:t+1], 'b -> b 1 1')
+			beta_t = rearrange(self.betas[t:t+1], 'b -> b 1 1')
 			# Predict the noise using the trained model.
 			eps_pred = self.model(x_t, t_tensor, condition)
 			# Compute coefficient: (1-α_t) / sqrt(1-ᾱ_t)
 			coef = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t)
 			# Compute x_{t-1} using the DDPM reverse formula.
-			x_prev = (1 / torch.sqrt(alpha_t)) * (x_t - coef * eps_pred)
+			# Using torch.einsum for explicit elementwise multiplication and broadcasting.
+			x_prev = torch.einsum("bij,bij->bij", (1 / torch.sqrt(alpha_t)).expand_as(x_t), (x_t - coef * eps_pred))
 			if t > 1:
 				z = torch.randn_like(x_t)
 				x_prev = x_prev + torch.sqrt(beta_t) * z
 			x_t = x_prev
 		return x_t[0, -1, :]  # Return tensor of shape (ACTION_DIM,)
-
