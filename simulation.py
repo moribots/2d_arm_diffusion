@@ -110,9 +110,9 @@ class Simulation:
 		Get the target position.
 		
 		In inference mode:
-		  - Build the condition as a concatenation of goal_pose, T_pose_prev, and T_pose_curr.
-			Here, since we have only one current object pose, we use it for both T_pose_prev and T_pose_curr.
-		  - Use the diffusion policy to generate an EE action every 0.1 seconds.
+		  - Build the condition as a flattened version of the object's state.
+			Since the observation expects two states, use the current object pose for both.
+		  - Use the diffusion policy to generate an EE action every 0.1 seconds (action hold).
 		  - Hold the action for intermediate frames.
 		
 		In collection mode:
@@ -120,19 +120,16 @@ class Simulation:
 		"""
 		if self.mode == "inference":
 			current_time = time.time()
-			# Check if we need to update the diffusion action (every 0.1 seconds).
 			if (current_time - self.last_diffusion_update_time) >= 0.1 or self.last_diffusion_action is None:
-				# Build condition in the same manner as training: 9-dim vector: goal_pose, T_pose_prev, T_pose_curr.
-				# Here, we use the object's current pose for both T_pose_prev and T_pose_curr.
-				condition = torch.tensor(list(self.goal_pose) + list(self.object.pose) + list(self.object.pose), dtype=torch.float32)
-				# Ensure condition has shape (1, CONDITION_DIM)
-				condition = condition.unsqueeze(0)
-				# Sample an EE action from the diffusion policy.
+				# Build condition: flatten [object.pose, object.pose] (each is 2D) to get a 4D tensor.
+				condition = torch.tensor(list(self.object.pose) + list(self.object.pose), dtype=torch.float32)
+				condition = condition.unsqueeze(0)  # shape (1,4)
 				self.last_diffusion_action = self.policy_inference.sample_action(condition)
 				self.last_diffusion_update_time = current_time
 			return self.last_diffusion_action
 		else:
 			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
+
 
 	def draw_goal_T(self):
 		"""

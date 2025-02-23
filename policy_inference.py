@@ -18,10 +18,8 @@ class DiffusionPolicyInference:
 		self.alphas = self.alphas.to(self.device)
 		self.alphas_cumprod = self.alphas_cumprod.to(self.device)
 
-		# ------------------------- Load Normalization Statistics -------------------------
-		# Load the normalization statistics using the Normalize class.
+		# Load normalization statistics using the Normalize class.
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
-		# ----------------------------------------------------------------------------
 
 	@torch.no_grad()
 	def sample_action(self, condition):
@@ -34,29 +32,22 @@ class DiffusionPolicyInference:
 		
 		where \\( z \\sim \\mathcal{N}(0,I) \\) (for \\(t > 1\\)).
 		
-		After the reverse diffusion process, the predicted action (which is still in the normalized space)
+		After the reverse diffusion process, the predicted action (still in the normalized space)
 		is un-normalized using the stored normalization statistics.
 		"""
-		# Start with pure Gaussian noise with shape (batch=1, WINDOW_SIZE+1, ACTION_DIM).
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
 		for t in reversed(range(1, self.T)):
-			# Create a tensor for the current diffusion timestep.
 			t_tensor = torch.tensor([t], device=self.device).float()  # shape: (1,)
-			# Reshape scalars to (1,1,1) using einops.rearrange for proper broadcasting.
 			alpha_t = rearrange(self.alphas[t:t+1], 'b -> b 1 1')
 			alpha_bar_t = rearrange(self.alphas_cumprod[t:t+1], 'b -> b 1 1')
 			beta_t = rearrange(self.betas[t:t+1], 'b -> b 1 1')
-			# Predict the noise using the trained model.
 			eps_pred = self.model(x_t, t_tensor, condition)
-			# Compute coefficient: (1-α_t) / sqrt(1-ᾱ_t)
 			coef = (1 - alpha_t) / torch.sqrt(1 - alpha_bar_t)
-			# Compute x_{t-1} using the DDPM reverse formula.
 			x_prev = torch.einsum("bij,bij->bij", (1 / torch.sqrt(alpha_t)).expand_as(x_t), (x_t - coef * eps_pred))
 			if t > 1:
 				z = torch.randn_like(x_t)
 				x_prev = x_prev + torch.sqrt(beta_t) * z
 			x_t = x_prev
-		# The output is still in the normalized scale; un-normalize using the Normalize class.
-		pred_normalized = x_t[0, -1, :]  # shape: (ACTION_DIM,)
+		pred_normalized = x_t[0, -1, :]  # (ACTION_DIM,)
 		pred = self.normalize.unnormalize_action(pred_normalized)
-		return pred  # Return tensor of shape (ACTION_DIM,)
+		return pred
