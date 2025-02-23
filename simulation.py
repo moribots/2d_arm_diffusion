@@ -14,6 +14,7 @@ from policy_inference import DiffusionPolicyInference
 from einops import rearrange
 from PIL import Image  # new import for image processing
 import torchvision.transforms as transforms  # new import for image transforms
+import shutil  # for moving/deleting temporary image folders
 
 # Define transform for images (similar to training)
 image_transform = transforms.Compose([
@@ -61,7 +62,7 @@ class Simulation:
 		# Flag to indicate when realistic data logging starts (after arm initialization).
 		self.session_initialized = False  # new flag for skipping initial unrealistic data
 		
-		# Create a directory for images.
+		# Permanent images folder (we dump images here if the session completes successfully)
 		self.images_dir = os.path.join(TRAINING_DATA_DIR, "images")
 		os.makedirs(self.images_dir, exist_ok=True)
 		
@@ -114,6 +115,11 @@ class Simulation:
 		self.last_diffusion_actions = None
 		self.last_diffusion_update_time = 0.0
 		self.session_initialized = False  # reset initialization flag
+		
+		# Create a temporary images folder for this session
+		self.temp_images_dir = os.path.join(TRAINING_DATA_DIR, f"temp_images_{int(time.time())}")
+		os.makedirs(self.temp_images_dir, exist_ok=True)
+		
 		print("New push session started.")
 
 	def get_current_image_tensor(self):
@@ -132,7 +138,7 @@ class Simulation:
 
 		In inference mode:
 		- If the buffer of predicted actions is empty or if it's time to resample,
-			build the state (from the last two end-effector positions) and capture the current image.
+		  build the state (from the last two end-effector positions) and capture the current image.
 		- Call the diffusion policy to obtain a full predicted sequence of actions.
 		- Store this sequence in a buffer and then pop the first action from the buffer to use as the target.
 		
@@ -192,6 +198,8 @@ class Simulation:
 			for event in pygame.event.get():
 				if event.type == pygame.QUIT:
 					pygame.quit()
+					if hasattr(self, "temp_images_dir") and os.path.exists(self.temp_images_dir):
+						shutil.rmtree(self.temp_images_dir, ignore_errors=True)
 					return
 				elif event.type == pygame.KEYDOWN:
 					if event.key == pygame.K_n and not self.session_active:
@@ -206,6 +214,8 @@ class Simulation:
 					print("Input outside arm workspace. Terminating session.")
 					self.session_active = False
 					self.demo_data = []
+					if os.path.exists(self.temp_images_dir):
+						shutil.rmtree(self.temp_images_dir, ignore_errors=True)
 					continue
 				
 				self.smoothed_target = self.update_smoothed_target(target)
@@ -214,6 +224,8 @@ class Simulation:
 					print("Invalid IK result detected. Terminating session.")
 					self.session_active = False
 					self.demo_data = []
+					if os.path.exists(self.temp_images_dir):
+						shutil.rmtree(self.temp_images_dir, ignore_errors=True)
 					continue
 				
 				ee_pos = self.arm.forward_kinematics()
@@ -260,6 +272,20 @@ class Simulation:
 				self.object.draw(self.screen)
 				pygame.draw.circle(self.screen, (0, 200, 0),
 								   (int(target[0].item()), int(target[1].item())), 6)
+				
+				# Logging and saving frame: Save image and log data only to the temporary folder.
+				# Generate a unique image filename based on system time in nanoseconds.
+				unique_time = time.time_ns()
+				base_filename = f"frame_{unique_time}"
+				img_filename = base_filename + ".png"
+				counter = 1
+				full_img_path = os.path.join(self.temp_images_dir, img_filename)
+				while os.path.exists(full_img_path):
+					img_filename = f"{base_filename}_{counter}.png"
+					full_img_path = os.path.join(self.temp_images_dir, img_filename)
+					counter += 1
+
+				# Capture the frame from the screen.
 				capture_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
 				capture_surface.fill(BACKGROUND_COLOR)
 				world_vertices = Object.get_transformed_polygon(self.goal_pose)
@@ -271,56 +297,39 @@ class Simulation:
 								   (int(ee[0].item()), int(ee[1].item())), EE_RADIUS)
 				pygame.draw.circle(capture_surface, (0, 200, 0),
 								   (int(target[0].item()), int(target[1].item())), 6)
-				timestamp = time.time() - self.session_start_time
 				
-				# Ensure unique image filenames to avoid duplicates
-				base_filename = f"frame_{timestamp:.3f}"
-				img_filename = base_filename + ".png"
-				counter = 1
-				full_img_path = os.path.join(self.images_dir, img_filename)
-				while os.path.exists(full_img_path):
-					img_filename = f"{base_filename}_{counter}.png"
-					full_img_path = os.path.join(self.images_dir, img_filename)
-					counter += 1
 				capture_image = pygame.transform.scale(capture_surface, (IMG_RES, IMG_RES))
 				pygame.image.save(capture_image, full_img_path)
+				
+				# Use elapsed time for logging (with 3-decimal precision).
+				timestamp = time.time() - self.session_start_time
 				
 				log_entry = {
 					"time": timestamp,
 					"goal_pose": self.goal_pose.tolist(),
 					"T_pose": self.object.pose.tolist(),
 					"EE_pos": ee.tolist(),
-					"image": img_filename  # Save image filename
+					"image": img_filename  # image filename (to be found in images/ after session success)
 				}
 				if self.mode == "inference":
 					log_entry["diffusion_action"] = target.tolist()
 				else:
 					log_entry["action"] = target.tolist()
-				# Also log the IK error for debugging purposes.
 				log_entry["ik_error"] = ik_error
-				
-				# Skip logging unrealistic data:
-				# Do not log frames from arm initialization until the EE snaps to the target (mouse position)
-				# Threshold set to 10.0 for EE proximity to target.
-				if self.mode != "inference":
-					if not self.session_initialized:
-						if torch.norm(ee - target) > 10.0:
-							# Skip logging this frame because EE has not yet snapped to the target.
-							#print("Skipping logging: waiting for EE to snap to target.")
-							pass  # Do not append log entry
-						else:
-							self.session_initialized = True
-							print(f'Session initialized. Logging started at {timestamp:.3f} seconds.')
-							if not self.demo_data or (timestamp - self.demo_data[-1]["time"]) >= SEC_PER_SAMPLE:
-								self.demo_data.append(log_entry)
-					else:
-						if not self.demo_data or (timestamp - self.demo_data[-1]["time"]) >= SEC_PER_SAMPLE:
-							self.demo_data.append(log_entry)
+				self.demo_data.append(log_entry)
 				
 				pos_error = torch.norm(self.object.pose[:2] - self.goal_pose[:2]).item()
 				orient_error = abs(angle_diff(self.object.pose[2], self.goal_pose[2]))
 				if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
 					print("T object reached desired pose. Session complete.")
+					# Move all files from the temporary folder to the permanent images directory.
+					for file in os.listdir(self.temp_images_dir):
+						src = os.path.join(self.temp_images_dir, file)
+						dst = os.path.join(self.images_dir, file)
+						shutil.move(src, dst)
+					# Remove the temporary folder.
+					os.rmdir(self.temp_images_dir)
+					
 					training_examples = []
 					if len(self.demo_data) >= DEMO_DATA_FRAMES:
 						for i in range(1, len(self.demo_data) - WINDOW_SIZE):
@@ -335,14 +344,14 @@ class Simulation:
 								]
 							}
 							actions = []
-							for j in range(i - 1, i + WINDOW_SIZE+1):
+							for j in range(i - 1, i + WINDOW_SIZE + 1):
 								key = "diffusion_action" if self.mode == "inference" else "action"
 								actions.append(self.demo_data[j][key])
 							training_examples.append({
 								"observation": obs,
 								"action": actions
 							})
-					# Ensure unique training data filenames to avoid duplicates
+					# Ensure unique training data filename
 					base_filename = f"session_{int(time.time())}_training"
 					filename = os.path.join(TRAINING_DATA_DIR, base_filename + ".json")
 					counter = 1
@@ -364,7 +373,6 @@ class Simulation:
 			self.clock.tick(FPS)
 
 if __name__ == "__main__":
-	import sys
 	parser = argparse.ArgumentParser(description="Run Push Simulation in data collection or inference mode.")
 	parser.add_argument("--mode", type=str, default="collection", choices=["collection", "inference"],
 						help="Choose 'collection' for data collection mode or 'inference' for diffusion inference mode.")
