@@ -67,8 +67,8 @@ class PolicyDataset(Dataset):
 		if "observation" not in sample or "image" not in sample["observation"]:
 			raise KeyError("Sample must contain observation['image']")
 		image_files = sample["observation"]["image"]
-		# Use the second image (img_t) as the visual input
-		img_path = os.path.join(TRAINING_DATA_DIR, image_files[1])
+		# Use the second image (img_t) as the visual input; update the path to point to the images subdirectory
+		img_path = os.path.join(TRAINING_DATA_DIR, "images", image_files[1])
 		image = Image.open(img_path).convert("RGB")
 		image = image_transform(image)  # shape (3, IMG_RES, IMG_RES)
 
@@ -81,6 +81,7 @@ class PolicyDataset(Dataset):
 			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
 		action = self.normalize.normalize_action(action)
 		return state, image, action
+
 
 def train():
 	print(f"CUDA is available: {torch.cuda.is_available()}")
