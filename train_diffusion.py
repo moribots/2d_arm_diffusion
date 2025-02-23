@@ -18,8 +18,8 @@ class PolicyDataset(Dataset):
 	PolicyDataset loads training samples from JSON files stored in TRAINING_DATA_DIR.
 	
 	Each sample is expected to have:
-	- "goal_pose": The desired T pose [x, y, theta].
-	- "T_pose": The current T object pose. If multiple poses are provided, the last two are used.
+	- "goal_pose": The desired pose [x, y, theta].
+	- "T_pose": The current object pose. If multiple poses are provided, the last two are used.
 	- "action": The end-effector (EE) position (a 2D vector) or a sequence of actions recorded during data collection.
 	
 	The condition is the concatenation of goal_pose, previous T_pose, and current T_pose.

@@ -2,7 +2,7 @@ import torch
 
 def get_beta_schedule(T, beta_start=1e-4, beta_end=0.02):
 	"""
-	Returns a linear beta schedule for T timesteps.
+	Returns a linear beta schedule for timesteps.
 	"""
 	return torch.linspace(beta_start, beta_end, T)
 
