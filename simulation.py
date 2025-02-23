@@ -45,6 +45,10 @@ class Simulation:
 		self.smoothed_target = None
 		self.prev_ee_pos = None
 		
+		# For inference mode: hold generated diffusion action for 0.1 sec.
+		self.last_diffusion_action = None
+		self.last_diffusion_update_time = 0.0
+		
 		# Create a directory for images.
 		self.images_dir = os.path.join(TRAINING_DATA_DIR, "images")
 		os.makedirs(self.images_dir, exist_ok=True)
@@ -96,20 +100,37 @@ class Simulation:
 		self.object.angular_velocity = 0.0
 		self.smoothed_target = None
 		self.prev_ee_pos = None
+		# Reset diffusion action hold state.
+		self.last_diffusion_action = None
+		self.last_diffusion_update_time = 0.0
 		print("New push session started.")
 
 	def get_target_input(self):
 		"""
 		Get the target position.
 		
-		In inference mode, sample an EE action using the diffusion policy conditioned on the desired pose.
-		In collection mode, use an external input provider or the mouse position.
+		In inference mode:
+		  - Build the condition as a concatenation of goal_pose, T_pose_prev, and T_pose_curr.
+			Here, since we have only one current object pose, we use it for both T_pose_prev and T_pose_curr.
+		  - Use the diffusion policy to generate an EE action every 0.1 seconds.
+		  - Hold the action for intermediate frames.
+		
+		In collection mode:
+		  - Use an external input provider (mouse position).
 		"""
 		if self.mode == "inference":
-			# Concatenate goal_pose and current object.pose to form a 6D condition.
-			condition = rearrange([self.goal_pose, self.object.pose], 'goal curr -> 1 (goal curr)').float()  # Shape: (1,6)
-			# Sample an EE action from the diffusion policy.
-			return self.policy_inference.sample_action(condition)
+			current_time = time.time()
+			# Check if we need to update the diffusion action (every 0.1 seconds).
+			if (current_time - self.last_diffusion_update_time) >= 0.1 or self.last_diffusion_action is None:
+				# Build condition in the same manner as training: 9-dim vector: goal_pose, T_pose_prev, T_pose_curr.
+				# Here, we use the object's current pose for both T_pose_prev and T_pose_curr.
+				condition = torch.tensor(list(self.goal_pose) + list(self.object.pose) + list(self.object.pose), dtype=torch.float32)
+				# Ensure condition has shape (1, CONDITION_DIM)
+				condition = condition.unsqueeze(0)
+				# Sample an EE action from the diffusion policy.
+				self.last_diffusion_action = self.policy_inference.sample_action(condition)
+				self.last_diffusion_update_time = current_time
+			return self.last_diffusion_action
 		else:
 			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
 
@@ -226,11 +247,6 @@ class Simulation:
 				capture_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
 				capture_surface.fill(BACKGROUND_COLOR)
 				# Draw only the goal outline.
-				# Temporarily set the drawing target to capture_surface.
-				# (Assuming draw_goal_T uses self.screen, we call it on capture_surface.)
-				# For that, we simulate the same call by replacing self.screen with capture_surface.
-				# Since the function only uses the passed surface, we can call:
-				Object.get_transformed_polygon(self.goal_pose)  # (Not needed here, so we call our own copy:)
 				world_vertices = Object.get_transformed_polygon(self.goal_pose)
 				pts = [(int(pt[0].item()), int(pt[1].item())) for pt in world_vertices]
 				pygame.draw.polygon(capture_surface, __import__("config").GOAL_T_COLOR, pts, width=3)
