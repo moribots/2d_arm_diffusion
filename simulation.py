@@ -44,7 +44,7 @@ class Simulation:
 		self.font = pygame.font.SysFont("Arial", 20)
 		
 		# Initialize simulation objects.
-		self.arm = ArmNR(BASE_POS, LINK_LENGTHS)
+		self.arm = ArmNR(BASE_POS, LINK_LENGTHS, torch.tensor(INITIAL_ANGLES, dtype=torch.float32))
 		self.object = Object(random_t_pose())
 		self.goal_pose = random_t_pose()
 		
@@ -155,6 +155,8 @@ class Simulation:
 				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
 			
+			print(f'current_ee: {current_ee}')
+			print(f'prev_ee_pos: {self.prev_ee_pos}')
 			print(f'Last diffusion actions shape: {len(self.last_diffusion_actions)}')
 			print(f'Diffusion action buffer: {self.last_diffusion_actions}')
 			# Pop the first action from the buffer to execute this tick
