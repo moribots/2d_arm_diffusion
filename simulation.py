@@ -6,9 +6,7 @@ import json
 import os
 import time
 import torch
-from config import (SCREEN_WIDTH, SCREEN_HEIGHT, BACKGROUND_COLOR, FPS,
-					GOAL_POS_TOL, GOAL_ORIENT_TOL, EE_RADIUS, ARM_LENGTH, BASE_POS,
-					K_CONTACT, K_DAMPING, NUM_JOINTS, LINK_LENGTHS, TRAINING_DATA_DIR)
+from config import *
 from utils import random_t_pose, angle_diff, draw_arrow
 from arm import ArmNR
 from t_object import TObject
@@ -42,10 +40,14 @@ class Simulation:
 		self.goal_pose = random_t_pose()
 		
 		self.session_active = False
-		self.demo_data = []
+		self.demo_data = []  # Raw per-frame logs (downsampled to 10Hz)
 		self.session_start_time = None
 		self.smoothed_target = None
 		self.prev_ee_pos = None
+		
+		# Create a directory for images.
+		self.images_dir = os.path.join(TRAINING_DATA_DIR, "images")
+		os.makedirs(self.images_dir, exist_ok=True)
 		
 		# Simulation parameter: maximum change in target per frame.
 		self.max_target_delta = 10.0
@@ -85,7 +87,7 @@ class Simulation:
 		Initialize a new push session.
 		"""
 		self.session_active = True
-		self.demo_data = []
+		self.demo_data = []  # Reset raw log
 		self.session_start_time = time.time()
 		self.T_object = TObject(random_t_pose())
 		self.goal_pose = random_t_pose()
@@ -219,30 +221,71 @@ class Simulation:
 				pygame.draw.circle(self.screen, (0, 200, 0),
 								   (int(target[0].item()), int(target[1].item())), 6)
 				
-				# Log simulation data.
+				# Capture the current screen image, resize it to IMG_RESxIMG_RES for ResNet, and save it.
 				timestamp = time.time() - self.session_start_time
+				img_filename = f"frame_{timestamp:.3f}.png"
+				full_img_path = os.path.join(self.images_dir, img_filename)
+				# Resize the current screen to IMG_RESxIMG_RES before saving.
+				screen_image = pygame.transform.scale(self.screen, (IMG_RES, IMG_RES))
+				pygame.image.save(screen_image, full_img_path)
+				
+				# Log raw simulation data per frame.
 				log_entry = {
 					"time": timestamp,
 					"goal_pose": self.goal_pose.tolist(),
 					"T_pose": self.T_object.pose.tolist(),
-					"ik_error": ik_error,
-					"EE_pos": ee_pos.tolist()
+					"EE_pos": ee_pos.tolist(),
+					"image": img_filename  # Save image filename
 				}
 				# Log the target differently depending on the mode.
 				if self.mode == "inference":
 					log_entry["diffusion_action"] = target.tolist()
 				else:
 					log_entry["action"] = target.tolist()
-				self.demo_data.append(log_entry)
+				# Also log the IK error for debugging purposes.
+				log_entry["ik_error"] = ik_error
+				
+				# Downsample training logs to 10Hz: only log if at least SEC_PER_SAMPLE s has passed since the last log.
+				if not self.demo_data or (timestamp - self.demo_data[-1]["time"]) >= SEC_PER_SAMPLE:
+					self.demo_data.append(log_entry)
 				
 				pos_error = torch.norm(self.T_object.pose[:2] - self.goal_pose[:2]).item()
 				orient_error = abs(angle_diff(self.T_object.pose[2], self.goal_pose[2]))
 				if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
 					print("T object reached desired pose. Session complete.")
-					filename = os.path.join(TRAINING_DATA_DIR, f"session_{int(time.time())}.json")
+					# Process raw log data into training examples matching LeRobot format.
+					# Each training example will have:
+					#  - observation: { "image": [img_{t-1}, img_t], "state": [state_{t-1}, state_t] }
+					#  - action: list of actions from t-1 to t+14
+					training_examples = []
+					# Ensure we have enough frames (each example spans DEMO_DATA_FRAMES frames)
+					if len(self.demo_data) >= DEMO_DATA_FRAMES:
+						for i in range(1, len(self.demo_data) - 14):
+							obs = {
+								"image": [
+									self.demo_data[i - 1]["image"],
+									self.demo_data[i]["image"]
+								],
+								"state": [
+									self.demo_data[i - 1]["EE_pos"],
+									self.demo_data[i]["EE_pos"]
+								]
+							}
+							# Collect actions from t-1 to t+14
+							actions = []
+							for j in range(i - 1, i + 15):
+								# Use "action" in collection mode, "diffusion_action" in inference mode.
+								key = "diffusion_action" if self.mode == "inference" else "action"
+								actions.append(self.demo_data[j][key])
+							training_examples.append({
+								"observation": obs,
+								"action": actions
+							})
+					# Save the processed training examples.
+					filename = os.path.join(TRAINING_DATA_DIR, f"session_{int(time.time())}_training.json")
 					with open(filename, "w") as f:
-						json.dump(self.demo_data, f, indent=2)
-					print(f"Session data saved to {filename}.")
+						json.dump(training_examples, f, indent=2)
+					print(f"Training session data saved to {filename}.")
 					self.session_active = False
 			
 			else:
@@ -255,6 +298,7 @@ class Simulation:
 			self.clock.tick(FPS)
 
 if __name__ == "__main__":
+	import sys
 	parser = argparse.ArgumentParser(description="Run Push T Simulation in data collection or inference mode.")
 	parser.add_argument("--mode", type=str, default="collection", choices=["collection", "inference"],
 						help="Choose 'collection' for data collection mode or 'inference' for diffusion inference mode.")
