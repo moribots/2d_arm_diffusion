@@ -45,7 +45,7 @@ WINDOW_SIZE = 14  # Number of consecutive action timestamps to form the sequence
 
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
-CONDITION_DIM = 15          # 6 steps * 2.5 params/step (x,y,theta) + 3 goal params
+CONDITION_DIM = 4   # Condition is built from the observation state: two 2D states flattened
 
 # Temporal Parameters
 FPS = 100
