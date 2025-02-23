@@ -23,7 +23,7 @@ class Simulation:
 	
 	In inference mode ("inference"):
 	  - The simulation loads a trained diffusion policy.
-	  - It uses the diffusion policy to generate an EE target based on the desired pose.
+	  - It uses the diffusion policy to generate an EE action based on the desired pose.
 	  - The generated target (diffusion_action) is logged.
 	"""
 	def __init__(self, mode="collection"):
@@ -214,6 +214,7 @@ class Simulation:
 					self.object.velocity = torch.zeros(2, dtype=torch.float32)
 					self.object.angular_velocity = 0.0
 				
+				# Draw the full arm and object on the main screen.
 				self.arm.draw(self.screen)
 				self.object.draw(self.screen)
 				
@@ -221,20 +222,44 @@ class Simulation:
 				pygame.draw.circle(self.screen, (0, 200, 0),
 								   (int(target[0].item()), int(target[1].item())), 6)
 				
-				# Capture the current screen image, resize it to IMG_RESxIMG_RES for ResNet, and save it.
+				# Create an off-screen surface for the screenshot.
+				capture_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+				capture_surface.fill(BACKGROUND_COLOR)
+				# Draw only the goal outline.
+				# Temporarily set the drawing target to capture_surface.
+				# (Assuming draw_goal_T uses self.screen, we call it on capture_surface.)
+				# For that, we simulate the same call by replacing self.screen with capture_surface.
+				# Since the function only uses the passed surface, we can call:
+				Object.get_transformed_polygon(self.goal_pose)  # (Not needed here, so we call our own copy:)
+				world_vertices = Object.get_transformed_polygon(self.goal_pose)
+				pts = [(int(pt[0].item()), int(pt[1].item())) for pt in world_vertices]
+				pygame.draw.polygon(capture_surface, __import__("config").GOAL_T_COLOR, pts, width=3)
+				
+				# Draw the object.
+				self.object.draw(capture_surface)
+				
+				# Draw the end-effector as a small circle.
+				ee = self.arm.forward_kinematics()
+				pygame.draw.circle(capture_surface, (0, 0, 0),
+								   (int(ee[0].item()), int(ee[1].item())), EE_RADIUS)
+				
+				# Draw the target (mouse) marker.
+				pygame.draw.circle(capture_surface, (0, 200, 0),
+								   (int(target[0].item()), int(target[1].item())), 6)
+				
+				# Capture the off-screen surface: resize it to IMG_RES x IMG_RES for ResNet and save it.
 				timestamp = time.time() - self.session_start_time
 				img_filename = f"frame_{timestamp:.3f}.png"
 				full_img_path = os.path.join(self.images_dir, img_filename)
-				# Resize the current screen to IMG_RESxIMG_RES before saving.
-				screen_image = pygame.transform.scale(self.screen, (IMG_RES, IMG_RES))
-				pygame.image.save(screen_image, full_img_path)
+				capture_image = pygame.transform.scale(capture_surface, (IMG_RES, IMG_RES))
+				pygame.image.save(capture_image, full_img_path)
 				
 				# Log raw simulation data per frame.
 				log_entry = {
 					"time": timestamp,
 					"goal_pose": self.goal_pose.tolist(),
 					"T_pose": self.object.pose.tolist(),
-					"EE_pos": ee_pos.tolist(),
+					"EE_pos": ee.tolist(),
 					"image": img_filename  # Save image filename
 				}
 				# Log the target differently depending on the mode.
