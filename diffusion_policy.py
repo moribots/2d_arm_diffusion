@@ -48,12 +48,14 @@ class FiLMBlock(nn.Module):
 		# x: (B, channels, T); cond: (B, cond_dim)
 		gamma_beta = self.fc(cond)  # (B, channels*2)
 		gamma, beta = gamma_beta.chunk(2, dim=-1)  # each: (B, channels)
-		# Unsqueeze to prepare for einsum multiplication.
+		# Unsqueeze to prepare for broadcasting.
 		gamma = gamma.unsqueeze(-1)  # (B, channels, 1)
 		beta = beta.unsqueeze(-1)    # (B, channels, 1)
-		# Use einsum to perform elementwise multiplication: x * (1 + gamma)
-		modulated = torch.einsum("bct,bc1->bct", x, (1 + gamma))
+		# elementwise multiplication: x * (1 + gamma)
+		# Use a letter (here "z") instead of "1" for the singleton dimension.
+		modulated = torch.einsum("bct, bcz -> bct", x, (1 + gamma))
 		return modulated + beta  # FiLM modulation
+
 
 class DownBlock(nn.Module):
 	"""
