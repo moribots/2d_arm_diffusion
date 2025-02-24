@@ -15,8 +15,6 @@ from normalize import Normalize  # New normalization helper class
 
 from PIL import Image  # new import for image loading
 
-
-
 class PolicyDataset(Dataset):
 	"""
 	PolicyDataset loads training samples from JSON files stored in TRAINING_DATA_DIR.
@@ -93,11 +91,20 @@ def train():
 		pin_memory=True
 	)
 	model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1)
+	
+	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+	
+	# Move model to device
+	model.to(device)
+	# Wrap the model in DataParallel if more than one GPU is available.
+	if torch.cuda.device_count() > 1:
+		print(f"Using {torch.cuda.device_count()} GPUs for training.")
+		model = nn.DataParallel(model)
+	
 	optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 	mse_loss = nn.MSELoss(reduction="none")
-	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-	model.to(device)
+	
 	betas = get_beta_schedule(T)
 	alphas, alphas_cumprod = compute_alphas(betas)
 	alphas_cumprod = alphas_cumprod.to(device)
