@@ -169,6 +169,8 @@ class Simulation:
 			target = self.last_diffusion_actions[0]
 			# Remove the executed action from the buffer
 			self.last_diffusion_actions = self.last_diffusion_actions[1:]
+			print(f'Target action: {target}')
+			print(f'all actions: {self.last_diffusion_actions}')
 			return target
 		else:
 			# In collection mode, use mouse input.
