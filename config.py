@@ -1,4 +1,5 @@
 import torch
+import torchvision.transforms as transforms  # new import for image transforms
 
 # Screen settings
 SCREEN_WIDTH = 672
@@ -55,7 +56,14 @@ CONDITION_DIM = 4 + IMAGE_FEATURE_DIM   # Condition now includes 4 state values 
 FPS = 100
 SEC_PER_SAMPLE = 0.1
 DEMO_DATA_FRAMES = 16
-IMG_RES = 224
+IMG_RES = 96
+
+# Define transform for images (similar to training)
+image_transform = transforms.Compose([
+	transforms.Resize((IMG_RES, IMG_RES)),
+	transforms.ToTensor(),
+	transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
 
 # Directory for saving training data
 TRAINING_DATA_DIR = "training_data"

@@ -13,15 +13,7 @@ from object import Object
 from policy_inference import DiffusionPolicyInference
 from einops import rearrange
 from PIL import Image  # new import for image processing
-import torchvision.transforms as transforms  # new import for image transforms
 import shutil  # for moving/deleting temporary image folders
-
-# Define transform for images (similar to training)
-image_transform = transforms.Compose([
-	transforms.Resize((IMG_RES, IMG_RES)),
-	transforms.ToTensor(),
-	transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
 
 class Simulation:
 	"""
@@ -60,7 +52,7 @@ class Simulation:
 		self.last_diffusion_update_time = 0.0
 		
 		# Flag to indicate when realistic data logging starts (after arm initialization).
-		self.session_initialized = False  # new flag for skipping initial unrealistic data
+		self.session_initialized = False  
 		
 		# Permanent images folder (we dump images here if the session completes successfully)
 		self.images_dir = os.path.join(TRAINING_DATA_DIR, "images")
@@ -68,6 +60,9 @@ class Simulation:
 		
 		# Simulation parameter: maximum change in target per frame.
 		self.max_target_delta = 10.0
+		
+		# We'll store the last target so that image processing is consistent.
+		self.last_target = None
 		
 		# In inference mode, load the trained diffusion policy.
 		if self.mode == "inference":
@@ -122,15 +117,38 @@ class Simulation:
 		
 		print("New push session started.")
 
-	def get_current_image_tensor(self):
+	def get_current_image_tensor(self, target=None, for_save=False):
 		"""
-		Capture the current screen, convert it to a PIL image, and apply image transforms.
-		Returns a tensor of shape (1, 3, IMG_RES, IMG_RES).
+		Capture a processed simulation image.
+		If a target is provided, create a new surface, draw the goal polygon,
+		the object, the end-effector, and the target circle.
+		If for_save is True, return a raw PIL image (without transformation),
+		otherwise return a transformed tensor.
 		"""
-		data = pygame.image.tostring(self.screen, 'RGB')
-		img = Image.frombytes('RGB', (SCREEN_WIDTH, SCREEN_HEIGHT), data)
-		image_tensor = image_transform(img)
-		return image_tensor.unsqueeze(0)  # add batch dimension
+		if target is not None:
+			surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+			surface.fill(BACKGROUND_COLOR)
+			world_vertices = Object.get_transformed_polygon(self.goal_pose)
+			pts = [(int(pt[0].item()), int(pt[1].item())) for pt in world_vertices]
+			pygame.draw.polygon(surface, __import__("config").GOAL_T_COLOR, pts, width=3)
+			self.object.draw(surface)
+			ee = self.arm.forward_kinematics()
+			pygame.draw.circle(surface, (0, 0, 0), (int(ee[0].item()), int(ee[1].item())), EE_RADIUS)
+			pygame.draw.circle(surface, (0, 200, 0), (int(target[0].item()), int(target[1].item())), 6)
+			scaled_surface = pygame.transform.scale(surface, (IMG_RES, IMG_RES))
+			raw_str = pygame.image.tostring(scaled_surface, 'RGB')
+			pil_img = Image.frombytes('RGB', (IMG_RES, IMG_RES), raw_str)
+		else:
+			data = pygame.image.tostring(self.screen, 'RGB')
+			pil_img = Image.frombytes('RGB', (SCREEN_WIDTH, SCREEN_HEIGHT), data)
+		
+		if for_save:
+			# Return the raw PIL image for saving.
+			return pil_img
+		else:
+			# Return the transformed tensor for model input.
+			return image_transform(pil_img).unsqueeze(0)
+
 
 	def get_target_input(self):
 		"""
@@ -147,34 +165,30 @@ class Simulation:
 		"""
 		if self.mode == "inference":
 			current_time = time.time()
-			# If no actions are buffered or it's time to generate a new sequence, sample a new prediction.
 			if (self.last_diffusion_actions is None or len(self.last_diffusion_actions) == 0 or
 				(current_time - self.last_diffusion_update_time) >= SEC_PER_SAMPLE):
 				
-				# Build state condition from EE positions (using t-1 and t)
 				current_ee = self.arm.forward_kinematics()
 				if self.prev_ee_pos is None:
-					state = torch.cat([current_ee, current_ee], dim=0).unsqueeze(0)  # shape (1,4)
+					state = torch.cat([current_ee, current_ee], dim=0).unsqueeze(0)
 				else:
 					state = torch.cat([self.prev_ee_pos, current_ee], dim=0).unsqueeze(0)
 				
-				# Capture the current image from the simulation
-				image = self.get_current_image_tensor()  # shape (1, 3, IMG_RES, IMG_RES)
-				
-				# Generate the full predicted sequence of actions and store in the buffer
+				# Use processed image with current EE as target for consistency.
+				image = self.get_current_image_tensor(current_ee)
 				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
 			
-			# Pop the first action from the buffer to execute this tick
 			target = self.last_diffusion_actions[0]
-			# Remove the executed action from the buffer
 			self.last_diffusion_actions = self.last_diffusion_actions[1:]
 			print(f'Target action: {target}')
-			print(f'all actions: {self.last_diffusion_actions}')
+			print(f'Buffer actions: {self.last_diffusion_actions}')
+			self.last_target = target
 			return target
 		else:
-			# In collection mode, use mouse input.
-			return torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
+			target = torch.tensor(pygame.mouse.get_pos(), dtype=torch.float32)
+			self.last_target = target
+			return target
 
 	def draw_goal_T(self):
 		"""
@@ -275,8 +289,9 @@ class Simulation:
 				pygame.draw.circle(self.screen, (0, 200, 0),
 								   (int(target[0].item()), int(target[1].item())), 6)
 				
-				# Logging and saving frame: Save image and log data only to the temporary folder.
-				# Generate a unique image filename based on system time in nanoseconds.
+				# Logging and saving frame: use processed image for consistency.
+				pil_img = self.get_current_image_tensor(self.last_target, for_save=True)
+				
 				unique_time = time.time_ns()
 				base_filename = f"frame_{unique_time}"
 				img_filename = base_filename + ".png"
@@ -286,31 +301,15 @@ class Simulation:
 					img_filename = f"{base_filename}_{counter}.png"
 					full_img_path = os.path.join(self.temp_images_dir, img_filename)
 					counter += 1
-
-				# Capture the frame from the screen.
-				capture_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-				capture_surface.fill(BACKGROUND_COLOR)
-				world_vertices = Object.get_transformed_polygon(self.goal_pose)
-				pts = [(int(pt[0].item()), int(pt[1].item())) for pt in world_vertices]
-				pygame.draw.polygon(capture_surface, __import__("config").GOAL_T_COLOR, pts, width=3)
-				self.object.draw(capture_surface)
-				ee = self.arm.forward_kinematics()
-				pygame.draw.circle(capture_surface, (0, 0, 0),
-								   (int(ee[0].item()), int(ee[1].item())), EE_RADIUS)
-				pygame.draw.circle(capture_surface, (0, 200, 0),
-								   (int(target[0].item()), int(target[1].item())), 6)
+				pil_img.save(full_img_path)
 				
-				capture_image = pygame.transform.scale(capture_surface, (IMG_RES, IMG_RES))
-				pygame.image.save(capture_image, full_img_path)
-				
-				# Use elapsed time for logging (with 3-decimal precision).
 				timestamp = time.time() - self.session_start_time
 				
 				log_entry = {
 					"time": timestamp,
 					"goal_pose": self.goal_pose.tolist(),
 					"T_pose": self.object.pose.tolist(),
-					"EE_pos": ee.tolist(),
+					"EE_pos": ee_pos.tolist(),
 					"image": img_filename  # image filename (to be found in images/ after session success)
 				}
 				if self.mode == "inference":
@@ -324,12 +323,10 @@ class Simulation:
 				orient_error = abs(angle_diff(self.object.pose[2], self.goal_pose[2]))
 				if pos_error < GOAL_POS_TOL and orient_error < GOAL_ORIENT_TOL:
 					print("T object reached desired pose. Session complete.")
-					# Move all files from the temporary folder to the permanent images directory.
 					for file in os.listdir(self.temp_images_dir):
 						src = os.path.join(self.temp_images_dir, file)
 						dst = os.path.join(self.images_dir, file)
 						shutil.move(src, dst)
-					# Remove the temporary folder.
 					os.rmdir(self.temp_images_dir)
 					
 					training_examples = []
@@ -353,7 +350,6 @@ class Simulation:
 								"observation": obs,
 								"action": actions
 							})
-					# Ensure unique training data filename
 					base_filename = f"session_{int(time.time())}_training"
 					filename = os.path.join(TRAINING_DATA_DIR, base_filename + ".json")
 					counter = 1

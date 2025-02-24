@@ -9,19 +9,13 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter  # For TensorBoard visualization.
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
-from config import TRAINING_DATA_DIR, T, BATCH_SIZE, EPOCHS, LEARNING_RATE, ACTION_DIM, CONDITION_DIM, WINDOW_SIZE, IMG_RES
+from config import *
 from einops import rearrange
 from normalize import Normalize  # New normalization helper class
 
 from PIL import Image  # new import for image loading
-import torchvision.transforms as transforms  # new import for image transforms
 
-# Define transform for images
-image_transform = transforms.Compose([
-	transforms.Resize((IMG_RES, IMG_RES)),
-	transforms.ToTensor(),
-	transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
+
 
 class PolicyDataset(Dataset):
 	"""
