@@ -2,8 +2,9 @@ import torch
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
 from einops import rearrange
-from config import ACTION_DIM, CONDITION_DIM, WINDOW_SIZE
+from config import *
 from normalize import Normalize  # New Normalize class
+import numpy as np
 
 class DiffusionPolicyInference:
 	def __init__(self, model_path="diffusion_policy.pth", T=1000, device=None, norm_stats_path="normalization_stats.json"):
@@ -59,10 +60,12 @@ class DiffusionPolicyInference:
 		# Normalize the state condition (consistent with training)
 		state = self.normalize.normalize_condition(state)
 		
-		import numpy as np
 		eps = 1e-5  # Small constant for numerical stability
 		# Initialize x_t as random noise.
+		max_clipped = 3.0
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
+		# Clip to the same range used in the DDIM sampling
+		x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		
 		# Create a reduced set of timesteps for DDIM sampling (from high noise to low noise)
 		ddim_timesteps = np.linspace(0, self.T - 1, num_ddim_steps, dtype=int)
@@ -86,7 +89,7 @@ class DiffusionPolicyInference:
 			# Predict the original signal x0 from the noisy sample x_t and the predicted noise.
 			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t + eps)
 			# Clamp x0_pred to a fixed range to avoid extreme values.
-			x0_pred = torch.clamp(x0_pred, -10.0, 10.0)
+			x0_pred = torch.clamp(x0_pred, -max_clipped, max_clipped)
 			
 			# Get the cumulative product of alphas for the next timestep.
 			alpha_bar_t_next = self.alphas_cumprod[t_next].view(1, 1, 1)
@@ -94,10 +97,20 @@ class DiffusionPolicyInference:
 			# DDIM update rule: update x_t using the predicted x0 and epsilon.
 			x_t = torch.sqrt(alpha_bar_t_next) * x0_pred + torch.sqrt(1 - alpha_bar_t_next) * eps_pred
 			# Clamp x_t to prevent numerical explosion.
-			x_t = torch.clamp(x_t, -10.0, 10.0)
+			x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		
 		# Return the full sequence except for the t-1th action.
 		print("Raw x_t shape:", x_t.shape)
-		predicted_sequence_normalized = x_t[0, 1:, :]  # Shape: (WINDOW_SIZE+1, ACTION_DIM)
+		# After the full denoising process is complete
+		predicted_sequence_normalized = x_t[0, 1:, :]  # Your current code
+
+		# Unnormalize to get actions in environment space
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
+
+		# Clip the unnormalized actions to be within environment bounds
+		predicted_sequence = torch.clamp(
+			predicted_sequence,
+			min=torch.tensor([0, 0], device=self.device),
+			max=torch.tensor([SCREEN_WIDTH-1, SCREEN_HEIGHT-1], device=self.device)
+		)
 		return predicted_sequence
