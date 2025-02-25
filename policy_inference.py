@@ -11,7 +11,13 @@ class DiffusionPolicyInference:
 		self.device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
 		# Instantiate the model with the updated window size.
 		self.model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1).to(self.device)
-		self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+		# Load model trained from parallel gpus.
+		new_state_dict = {}
+		checkpoint = torch.load(model_path, map_location=self.device)
+		for key, value in checkpoint.items():
+			new_key = key.replace("module.", "")  # Remove "module." prefix
+			new_state_dict[new_key] = value
+		self.model.load_state_dict(new_state_dict)
 		self.model.eval()
 		self.betas = get_beta_schedule(self.T).to(self.device)
 		self.alphas, self.alphas_cumprod = compute_alphas(self.betas)
@@ -49,8 +55,10 @@ class DiffusionPolicyInference:
 
 		Returns:
 		A tensor of shape (window_size, action_dim) representing the denoised action sequence.
-
 		"""
+		# Normalize the state condition (consistent with training)
+		state = self.normalize.normalize_condition(state)
+		
 		import numpy as np
 		eps = 1e-5  # Small constant for numerical stability
 		# Initialize x_t as random noise.
@@ -88,7 +96,7 @@ class DiffusionPolicyInference:
 			# Clamp x_t to prevent numerical explosion.
 			x_t = torch.clamp(x_t, -10.0, 10.0)
 		
-		# return the full sequence except for the t-1th action.
+		# Return the full sequence except for the t-1th action.
 		print("Raw x_t shape:", x_t.shape)
 		predicted_sequence_normalized = x_t[0, 1:, :]  # Shape: (WINDOW_SIZE+1, ACTION_DIM)
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
