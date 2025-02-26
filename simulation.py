@@ -179,8 +179,8 @@ class Simulation:
 				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
 			
-			target = self.last_diffusion_actions[0]
-			self.last_diffusion_actions = self.last_diffusion_actions[1:]
+			target = self.last_diffusion_actions[0] # only execute the first action: receding horizon ctl
+			self.last_diffusion_actions = [] # self.last_diffusion_actions[1:]
 			print(f'Target action: {target}')
 			print(f'Buffer actions: {self.last_diffusion_actions}')
 			self.last_target = target
