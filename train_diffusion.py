@@ -101,6 +101,14 @@ def train():
 	
 	# Move model to device
 	model.to(device)
+
+	# Check if a pre-trained policy exists and load it.
+	checkpoint_path = os.path.join(OUTPUT_DIR, "diffusion_policy.pth")
+	if os.path.exists(checkpoint_path):
+		print(f"Loading pre-trained policy from {checkpoint_path}")
+		state_dict = torch.load(checkpoint_path, map_location=device)
+		model.load_state_dict(state_dict)
+
 	# Wrap the model in DataParallel if more than one GPU is available.
 	if torch.cuda.device_count() > 1:
 		print(f"Using {torch.cuda.device_count()} GPUs for training.")
