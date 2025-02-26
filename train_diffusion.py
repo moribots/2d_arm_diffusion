@@ -15,31 +15,78 @@ from normalize import Normalize  # New normalization helper class
 
 from PIL import Image  # new import for image loading
 
+# For LeRobot dataset loading
+if DATASET_TYPE == "lerobot":
+	from datasets import load_dataset
+	import numpy as np
+
 class PolicyDataset(Dataset):
 	"""
-	PolicyDataset loads training samples from JSON files stored in TRAINING_DATA_DIR.
+	PolicyDataset loads training samples for the diffusion policy.
 	
-	Each sample is expected to have:
-	  - "observation": a dict with:
-			- "image": list of image filenames (e.g. [img_{t-1}, img_t])
-			- "state": list of two states (each a 2D vector, e.g. [[x1,y1], [x2,y2]])
-	  - "action": a list of actions (each a 2D vector) representing the trajectory from t-1 to t+14.
-	
-	The condition is built by concatenating:
-	  - The flattened observation["state"] (resulting in 4 numbers)
-	  - Image features are extracted via the VisualEncoder branch in the model.
+	In the custom case, it loads training samples from JSON files stored in TRAINING_DATA_DIR.
+	In the LeRobot case (DATASET_TYPE == "lerobot"), it loads the Hugging Face dataset "lerobot/pusht",
+	groups frames by episode, and constructs training examples as follows:
+	  - The condition is built by concatenating:
+		  - The flattened observation["state"] from frames t-1 and t (4 numbers)
+		  - The image from the t-th frame is used as the visual input (extracted from the second image in a pair)
+	  - The target action sequence is constructed from the actions in a temporal window 
+		spanning from frame t-1 to frame t+WINDOW_SIZE.
 	Normalization of conditions and actions is handled via the Normalize class.
 	"""
 	def __init__(self, data_dir):
 		self.samples = []
-		for filename in os.listdir(data_dir):
-			if filename.endswith('.json'):
-				filepath = os.path.join(data_dir, filename)
-				with open(filepath, 'r') as f:
-					data = json.load(f)
-					self.samples.extend(data)
+		# Branch for LeRobot dataset
+		if DATASET_TYPE == "lerobot":
+			# Load the Hugging Face dataset "lerobot/pusht" (using the 'train' split)
+			hf_dataset = load_dataset("lerobot/pusht", split="train")
+			# Group samples by episode_index (episode_index is stored as a 1-element list)
+			episodes = {}
+			for sample in hf_dataset:
+				ep = sample["episode_index"][0]  # episode_index is a list with one element
+				if ep not in episodes:
+					episodes[ep] = []
+				episodes[ep].append(sample)
+			# For each episode, sort frames by frame_index and construct training examples
+			for ep, ep_samples in episodes.items():
+				# Sort by frame_index (frame_index is stored as a 1-element list)
+				ep_samples = sorted(ep_samples, key=lambda s: s["frame_index"][0])
+				# We require at least (WINDOW_SIZE + 2) frames to form one training example:
+				# one for t-1 and one for t, plus WINDOW_SIZE additional actions.
+				for i in range(1, len(ep_samples) - WINDOW_SIZE):
+					# Build observation: condition from frames i-1 and i.
+					obs = {
+						"state": [
+							ep_samples[i-1]["observation.state"],  # state at t-1 (list of 2 floats)
+							ep_samples[i]["observation.state"]       # state at t (list of 2 floats)
+						],
+						"image": [
+							ep_samples[i-1]["observation.image"],    # image at t-1 (assumed as array)
+							ep_samples[i]["observation.image"]         # image at t (assumed as array)
+						]
+					}
+					# Build action sequence: actions from frame i-1 to i+WINDOW_SIZE (total WINDOW_SIZE+1 actions)
+					actions = []
+					for j in range(i-1, i + WINDOW_SIZE + 1):
+						actions.append(ep_samples[j]["action"])  # each action is a list of 2 floats
+					sample_new = {
+						"observation": obs,
+						"action": actions
+					}
+					self.samples.append(sample_new)
+			self._data_source = "lerobot"
+		else:
+			# Original method: load JSON files from data_dir
+			for filename in os.listdir(data_dir):
+				if filename.endswith('.json'):
+					filepath = os.path.join(data_dir, filename)
+					with open(filepath, 'r') as f:
+						data = json.load(f)
+						self.samples.extend(data)
+			self._data_source = "custom"
 		# Compute normalization stats using the Normalize class.
 		self.normalize = Normalize.compute_from_samples(self.samples)
+
 		# Optionally, save the normalization stats to a file for later use.
 		self.normalize.save(OUTPUT_DIR + "normalization_stats.json")
 
@@ -51,19 +98,29 @@ class PolicyDataset(Dataset):
 		# Build state condition from observation["state"].
 		if "observation" not in sample or "state" not in sample["observation"]:
 			raise KeyError("Sample must contain observation['state']")
-		state = torch.tensor(sample["observation"]["state"], dtype=torch.float32)  # shape (2,2)
+		state = torch.tensor(sample["observation"]["state"], dtype=torch.float32)  # shape (2,2) if two states
 		state = state.flatten()  # (4,)
 		state = self.normalize.normalize_condition(state)
 		
-		# Load image from observation["image"]
-		if "observation" not in sample or "image" not in sample["observation"]:
-			raise KeyError("Sample must contain observation['image']")
-		image_files = sample["observation"]["image"]
-		# Use the second image (img_t) as the visual input; update the path to point to the images subdirectory
-		img_path = os.path.join(TRAINING_DATA_DIR, "images", image_files[1])
-		image = Image.open(img_path).convert("RGB")
-		image = image_transform(image)  # shape (3, IMG_RES, IMG_RES)
-
+		# Load image for visual input.
+		# For the LeRobot dataset, we assume "observation.image" contains image arrays.
+		if self._data_source == "lerobot":
+			# Use the second image (corresponding to t) as visual input.
+			image_array = sample["observation"]["image"][1]
+			# If the image is not a numpy array, convert it.
+			if not isinstance(image_array, np.ndarray):
+				image_array = np.array(image_array, dtype=np.uint8)
+			# Convert numpy array to PIL Image.
+			image = Image.fromarray(image_array)
+			image = image_transform(image)  # shape (3, IMG_RES, IMG_RES)
+		else:
+			# Custom case: "observation.image" contains image file names.
+			image_files = sample["observation"]["image"]
+			img_path = os.path.join(TRAINING_DATA_DIR, "images", image_files[1])
+			image = Image.open(img_path).convert("RGB")
+			image = image_transform(image)
+		
+		# Process action sequence.
 		if "action" not in sample:
 			raise KeyError("Sample does not contain 'action'")
 		action_data = sample["action"]
@@ -95,6 +152,8 @@ def train():
 		num_workers=4,
 		pin_memory=True
 	)
+	print("len dataloader", len(dataloader))
+	print("len dataset", len(dataset))
 	model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1)
 	
 	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")

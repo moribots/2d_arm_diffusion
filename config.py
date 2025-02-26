@@ -38,7 +38,7 @@ LINK_COLLISION_WEIGHT = 5.0
 
 # Training parameters for diffusion policy
 T = 1000            # Total number of diffusion timesteps
-BATCH_SIZE = 400     # Batch size used during training
+BATCH_SIZE = 2048     # Batch size used during training
 EPOCHS = 200         # Total number of epochs for training
 LEARNING_RATE = 5e-4
 BETAS = (0.9, 0.999)
@@ -72,4 +72,10 @@ TRAINING_DATA_DIR = "training_data"
 OUTPUT_DIR = ""
 
 # Diffusion loss masking configuration
-DO_MASK_LOSS_FOR_PADDING = False  # Set to True if padded actions should be masked in the loss computation
+DO_MASK_LOSS_FOR_PADDING = True  # Set to True if padded actions should be masked in the loss computation
+
+# -------------------------------------------------------------------
+# Dataset and Environment selection for LeRobot integration
+# -------------------------------------------------------------------
+DATASET_TYPE = "lerobot"      # options: "custom", "lerobot"
+LE_ROBOT_GYM_ENV_NAME = "gym_pusht/PushT-v0"
