@@ -100,17 +100,22 @@ class UNet1D(nn.Module):
 		super().__init__()
 		self.initial_conv = nn.Conv1d(action_dim, hidden_dim, kernel_size=3, padding=1)
 		self.down1 = DownBlock(hidden_dim, hidden_dim * 2, cond_dim)
-		self.bottleneck = nn.Conv1d(hidden_dim * 2, hidden_dim * 2, kernel_size=3, padding=1)
+		self.down2 = DownBlock(hidden_dim * 2, hidden_dim * 4, cond_dim)
+		self.bottleneck = nn.Conv1d(hidden_dim * 4, hidden_dim * 4, kernel_size=3, padding=1)
+		self.up2 = UpBlock(hidden_dim * 4 + hidden_dim * 4, hidden_dim * 2, cond_dim)
 		self.up1 = UpBlock(hidden_dim * 2 + hidden_dim * 2, hidden_dim, cond_dim)
 		self.final_conv = nn.Conv1d(hidden_dim, action_dim, kernel_size=3, padding=1)
 	
 	def forward(self, x, cond):
-		x = rearrange(x, 'b t a -> b a t')
-		x0 = self.initial_conv(x)
-		x1 = self.down1(x0, cond)
-		x_b = self.bottleneck(x1)
-		x_up = self.up1(x_b, x1, cond)
-		out = self.final_conv(x_up)
+		# x shape: (batch, time, action_dim)
+		x = rearrange(x, 'b t a -> b a t')  # (batch, channels, time)
+		x0 = self.initial_conv(x)            # (batch, hidden_dim, time)
+		x1 = self.down1(x0, cond)            # (batch, hidden_dim*2, time)
+		x2 = self.down2(x1, cond)            # (batch, hidden_dim*4, time)
+		x_b = self.bottleneck(x2)            # (batch, hidden_dim*4, time)
+		x_up2 = self.up2(x_b, x2, cond)      # (batch, hidden_dim*2, time)
+		x_up1 = self.up1(x_up2, x1, cond)      # (batch, hidden_dim, time)
+		out = self.final_conv(x_up1)         # (batch, action_dim, time)
 		out = rearrange(out, 'b a t -> b t a')
 		return out
 
@@ -151,7 +156,7 @@ class DiffusionPolicy(nn.Module):
 		# Total global conditioning dimension: (4+32) + time_embed_dim.
 		self.global_cond_dim = (CONDITION_DIM - 0) + time_embed_dim  
 		
-		# Main Network: a 1D U-Net that takes the noisy action sequence as input and predicts the noise.
+		# Main Network: an upgraded 1D U-Net that takes the noisy action sequence as input and predicts the noise.
 		self.unet = UNet1D(action_dim, cond_dim=self.global_cond_dim, hidden_dim=64)
 	
 	def forward(self, x, t, state, image):
