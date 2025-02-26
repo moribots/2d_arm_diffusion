@@ -106,7 +106,7 @@ def train():
 		print(f"Using {torch.cuda.device_count()} GPUs for training.")
 		model = nn.DataParallel(model)
 	
-	optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+	optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, betas=BETAS, weight_decay=WEIGHT_DECAY)
 	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 	mse_loss = nn.MSELoss(reduction="none")
 	

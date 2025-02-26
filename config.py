@@ -40,7 +40,9 @@ LINK_COLLISION_WEIGHT = 5.0
 T = 1000            # Total number of diffusion timesteps
 BATCH_SIZE = 400     # Batch size used during training
 EPOCHS = 200         # Total number of epochs for training
-LEARNING_RATE = 1e-3  # Learning rate for the optimizer
+LEARNING_RATE = 5e-4
+BETAS = (0.9, 0.999)
+WEIGHT_DECAY = 0.01
 
 # Set the temporal window size.
 WINDOW_SIZE = 14  # Number of consecutive action timestamps to form the sequence.
