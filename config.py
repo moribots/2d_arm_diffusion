@@ -52,7 +52,7 @@ IMAGE_FEATURE_DIM = 32
 
 # Action and condition dimensions
 ACTION_DIM = 2      # EE position is 2D
-CONDITION_DIM = 4 + IMAGE_FEATURE_DIM   # Condition now includes 4 state values and image features (32-dim)
+CONDITION_DIM = 2 + IMAGE_FEATURE_DIM   # Condition now includes 4 state values and image features (32-dim)
 
 # Temporal Parameters
 FPS = 100

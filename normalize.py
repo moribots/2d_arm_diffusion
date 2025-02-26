@@ -21,9 +21,10 @@ class Normalize:
         actions_list = []
         for sample in samples:
             # Process condition from observation state.
-            if "observation" not in sample or "state" not in sample["observation"]:
+            if "observation.state" not in sample:
+                print(f"Invalid sample: {sample}")
                 raise KeyError("Sample must contain observation['state']")
-            state = torch.tensor(sample["observation"]["state"], dtype=torch.float32)  # shape (2,2)
+            state = torch.tensor(sample["observation.state"], dtype=torch.float32)  # shape (2,2)
             cond = state.flatten()  # shape (4,)
             conditions.append(cond)
             

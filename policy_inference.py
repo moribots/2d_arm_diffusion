@@ -5,6 +5,7 @@ from einops import rearrange
 from config import *
 from normalize import Normalize  # New Normalize class
 import numpy as np
+import os
 
 class DiffusionPolicyInference:
 	def __init__(self, model_path=OUTPUT_DIR + "diffusion_policy.pth", T=1000, device=None, norm_stats_path=OUTPUT_DIR + "normalization_stats.json"):
@@ -14,11 +15,17 @@ class DiffusionPolicyInference:
 		self.model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1).to(self.device)
 		# Load model trained from parallel gpus.
 		new_state_dict = {}
-		checkpoint = torch.load(model_path, map_location=self.device)
-		for key, value in checkpoint.items():
-			new_key = key.replace("module.", "")  # Remove "module." prefix
-			new_state_dict[new_key] = value
-		self.model.load_state_dict(new_state_dict)
+		# Optionally load checkpoint if available.
+		if model_path and os.path.exists(model_path):
+			checkpoint = torch.load(model_path, map_location=self.device)
+			new_state_dict = {}
+			for key, value in checkpoint.items():
+				new_key = key.replace("module.", "")  # Remove "module." prefix
+				new_state_dict[new_key] = value
+			self.model.load_state_dict(new_state_dict)
+			print(f"Loaded checkpoint from {model_path}")
+		else:
+			print(f"No checkpoint found at {model_path}, starting from scratch.")
 		self.model.eval()
 		self.betas = get_beta_schedule(self.T).to(self.device)
 		self.alphas, self.alphas_cumprod = compute_alphas(self.betas)
@@ -29,7 +36,7 @@ class DiffusionPolicyInference:
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.no_grad()
-	def sample_action(self, state, image, num_ddim_steps=50):
+	def sample_action(self, state, image, num_ddim_steps=20):
 		"""
 		Generate a sample EE action using DDIM sampling (Denoising Diffusion Implicit Models) with reduced steps.
 		
@@ -100,7 +107,6 @@ class DiffusionPolicyInference:
 			x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		
 		# Return the full sequence except for the t-1th action.
-		print("Raw x_t shape:", x_t.shape)
 		# After the full denoising process is complete
 		predicted_sequence_normalized = x_t[0, 1:, :]  # Your current code
 

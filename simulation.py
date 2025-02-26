@@ -14,6 +14,11 @@ from policy_inference import DiffusionPolicyInference
 from einops import rearrange
 from PIL import Image  # new import for image processing
 import shutil  # for moving/deleting temporary image folders
+import gymnasium as gym
+import gym_pusht
+import numpy as np
+from torchvision.transforms import ToPILImage
+from datasets import load_dataset
 
 class Simulation:
 	"""
@@ -32,25 +37,48 @@ class Simulation:
 	the gym environment will be used instead of the custom pygame simulation.
 	"""
 	def __init__(self, mode="collection", env_type="custom"):
+
 		self.mode = mode  # Mode can be "collection" or "inference"
 		self.env_type = env_type  # "custom" or "lerobot"
-		
+		norm_stats_path = OUTPUT_DIR + "normalization_stats.json"
+
+		# -------------------------------------------------------
+		# Recompute normalization statistics before creating policy.
+		# For LeRobot environment, use the dataset factory; for custom sim, use TRAINING_DATA_DIR.
+		# -------------------------------------------------------
+		if self.env_type == "lerobot":
+			# Login using e.g. `huggingface-cli login` to access this dataset
+			dataset = load_dataset("lerobot/pusht")
+			if dataset is not None:
+				print("Loading training data from LeRobot dataset via load_dataset...")
+				training_samples = list(dataset["train"])
+				print("Recomputing normalization statistics from LeRobot training data...")
+				new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+				new_norm.save(norm_stats_path)
+			else:
+				print("dataset not available; using existing normalization stats.")
+		else:
+			training_samples = []
+			for filename in os.listdir(TRAINING_DATA_DIR):
+				if filename.endswith('.json'):
+					filepath = os.path.join(TRAINING_DATA_DIR, filename)
+					with open(filepath, "r") as f:
+						data = json.load(f)
+						training_samples.extend(data)
+			if training_samples:
+				print("Recomputing normalization statistics from custom training data...")
+				new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+				new_norm.save(norm_stats_path)
+			else:
+				print("No custom training samples found; using existing normalization stats.")
+		# -------------------------------------------------------		
 		if self.env_type == "lerobot":
 			# Initialize LeRobot gym environment
-			import gym  # local import for gym
-			import gym_pusht
-			self.env = gym.make(LE_ROBOT_GYM_ENV_NAME)
+			self.env = gym.make(LE_ROBOT_GYM_ENV_NAME, obs_type="pixels_agent_pos", render_mode="rgb_array")
 			# In gym mode, we assume inference mode and load the diffusion policy.
 			self.policy_inference = DiffusionPolicyInference(model_path="diffusion_policy.pth")
 			print("Running in LeRobot Gym Environment mode")
-		else:
-			# Initialize custom simulation using pygame
-			pygame.init()
-			self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-			pygame.display.set_caption("Push Simulation")
-			self.clock = pygame.time.Clock()
-			self.font = pygame.font.SysFont("Arial", 20)
-			
+		else:			
 			# Initialize simulation objects.
 			self.arm = ArmNR(BASE_POS, LINK_LENGTHS, torch.tensor(INITIAL_ANGLES, dtype=torch.float32))
 			self.object = Object(random_t_pose())
@@ -85,6 +113,13 @@ class Simulation:
 				print("Running in Inference Mode")
 			else:
 				print("Running in Data Collection Mode")
+		
+		# Initialize custom simulation using pygame
+		pygame.init()
+		self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+		pygame.display.set_caption("Push Simulation")
+		self.clock = pygame.time.Clock()
+		self.font = pygame.font.SysFont("Arial", 20)
 	
 	# ---------------------------
 	# The following methods are used in the custom simulation mode.
@@ -198,8 +233,8 @@ class Simulation:
 				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
 				self.last_diffusion_update_time = current_time
 			
-			target = self.last_diffusion_actions[0] # only execute the first action: receding horizon ctl
-			self.last_diffusion_actions = [] # self.last_diffusion_actions[1:]
+			target = self.last_diffusion_actions[0]  # only execute the first action: receding horizon ctl
+			self.last_diffusion_actions = []  # self.last_diffusion_actions[1:]
 			print(f'Target action: {target}')
 			print(f'Buffer actions: {self.last_diffusion_actions}')
 			self.last_target = target
@@ -221,40 +256,57 @@ class Simulation:
 		"""
 		Run the main simulation loop.
 		
-		Press [N] to start a new session.
+		Press [N] to start a new push session.
 		The session terminates if the input (or generated target) is outside the arm workspace,
 		if the inverse kinematics solution is invalid, or when the object reaches the goal.
 		"""
 		if self.env_type == "lerobot":
-			# ---------------------------
-			# Gym simulation loop for LeRobot pushT gym environment.
-			# ---------------------------
-			state = self.env.reset()
+
+			observation, info = self.env.reset()
 			done = False
 			while not done:
-				# Prepare state tensor from gym observation.
-				if isinstance(state, dict) and "state" in state:
-					state_tensor = torch.tensor(state["state"], dtype=torch.float32).flatten().unsqueeze(0)
-				else:
-					state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+				agent_pos_np = np.array(observation["agent_pos"])
+				state = torch.from_numpy(agent_pos_np).float().unsqueeze(0)
+				image = torch.from_numpy(observation["pixels"]).to(torch.float32)
+				image = rearrange(image, 'h w c -> c h w')
+				image_pil = ToPILImage()(image)
+				image_tensor = image_transform(image_pil)
 				
-				# Capture image from gym environment render.
-				img_array = self.env.render(mode='rgb_array')
-				pil_img = Image.fromarray(img_array)
-				image_tensor = image_transform(pil_img).unsqueeze(0)
 				
 				# Get target action from diffusion policy.
-				target = self.policy_inference.sample_action(state_tensor, image_tensor)
+				target = self.policy_inference.sample_action(state, image_tensor)[0]
 				
 				# Step the gym environment using the predicted action.
-				state, reward, done, info = self.env.step(target.cpu().numpy())
-				# Optionally, render the environment.
-				self.env.render()
+				observation, reward, done, truncated, info = self.env.step(target.cpu().numpy())
+				img_arr = self.env.render()
+				surface = pygame.surfarray.make_surface(img_arr.swapaxes(0, 1))
+				self.screen.blit(surface, (0, 0))
+				pygame.display.flip()
+				self.clock.tick(FPS)
 			self.env.close()
 		else:
 			# ---------------------------
 			# Existing pygame simulation loop.
 			# ---------------------------
+			# Load training data from TRAINING_DATA_DIR (custom simulation training data) and recompute normalization.
+			training_samples = []
+			for filename in os.listdir(TRAINING_DATA_DIR):
+				if filename.endswith('.json'):
+					filepath = os.path.join(TRAINING_DATA_DIR, filename)
+					with open(filepath, "r") as f:
+						data = json.load(f)
+						training_samples.extend(data)
+			if training_samples:
+				print("Recomputing normalization statistics from custom training data...")
+				new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+				new_norm.save(OUTPUT_DIR + "normalization_stats.json")
+				# (Assuming your policy_inference uses the same normalization stats)
+				if self.mode == "inference":
+					self.policy_inference.normalize = new_norm
+				print("Normalization stats updated.")
+			else:
+				print("No custom training samples found; using existing normalization stats.")
+
 			print("Press [N] to start a new push session.")
 			print("Session saves if goal tolerances are met; session quits if IK fails or if input leaves workspace.")
 			os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
@@ -386,7 +438,7 @@ class Simulation:
 										self.demo_data[i - 1]["image"],
 										self.demo_data[i]["image"]
 									],
-									"state": [
+									"observation.state": [
 										self.demo_data[i - 1]["EE_pos"],
 										self.demo_data[i]["EE_pos"]
 									]

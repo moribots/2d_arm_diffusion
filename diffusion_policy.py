@@ -174,6 +174,8 @@ class DiffusionPolicy(nn.Module):
 		"""
 		if x.dim() == 2:
 			x = x.unsqueeze(1)
+		if image.dim() == 3:
+			image = image.unsqueeze(0)
 		t = rearrange(t, 'b -> b 1').float()
 		t_emb = get_sinusoidal_embedding(t, self.time_embed_dim)
 		t_emb = self.time_mlp(t_emb)
