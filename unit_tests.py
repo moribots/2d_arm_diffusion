@@ -127,6 +127,7 @@ class TestVisualEncoder(unittest.TestCase):
 		batch = 2
 		x = torch.randn(batch, 3, IMG_RES, IMG_RES)
 		features = encoder(x)
+		print(f'features shape {features.shape}')
 		self.assertEqual(features.shape, (batch, 32))
 		self.assertTrue(torch.isfinite(features).all())
 
@@ -150,7 +151,7 @@ class TestPolicyInference(unittest.TestCase):
 		state = torch.randn(1, 4)
 		image = torch.randn(1, 3, IMG_RES, IMG_RES)
 		action = self.inference.sample_action(state, image, num_ddim_steps=10)
-		self.assertEqual(action.shape, (ACTION_DIM,))
+		self.assertEqual(action.shape, (WINDOW_SIZE, ACTION_DIM))
 		self.assertFalse(torch.isnan(action).any())
 
 # ---------- Tests for PolicyDataset in train_diffusion.py ----------

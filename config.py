@@ -39,7 +39,7 @@ LINK_COLLISION_WEIGHT = 5.0
 # Training parameters for diffusion policy
 T = 1000            # Total number of diffusion timesteps
 BATCH_SIZE = 400     # Batch size used during training
-EPOCHS = 5000         # Total number of epochs for training
+EPOCHS = 200         # Total number of epochs for training
 LEARNING_RATE = 1e-3  # Learning rate for the optimizer
 
 # Set the temporal window size.
@@ -67,3 +67,7 @@ image_transform = transforms.Compose([
 
 # Directory for saving training data
 TRAINING_DATA_DIR = "training_data"
+OUTPUT_DIR = ""
+
+# Diffusion loss masking configuration
+DO_MASK_LOSS_FOR_PADDING = False  # Set to True if padded actions should be masked in the loss computation

@@ -7,7 +7,7 @@ from normalize import Normalize  # New Normalize class
 import numpy as np
 
 class DiffusionPolicyInference:
-	def __init__(self, model_path="diffusion_policy.pth", T=1000, device=None, norm_stats_path="normalization_stats.json"):
+	def __init__(self, model_path=OUTPUT_DIR + "diffusion_policy.pth", T=1000, device=None, norm_stats_path=OUTPUT_DIR + "normalization_stats.json"):
 		self.T = T
 		self.device = device if device is not None else (torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
 		# Instantiate the model with the updated window size.

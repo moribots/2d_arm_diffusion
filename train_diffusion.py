@@ -41,7 +41,7 @@ class PolicyDataset(Dataset):
 		# Compute normalization stats using the Normalize class.
 		self.normalize = Normalize.compute_from_samples(self.samples)
 		# Optionally, save the normalization stats to a file for later use.
-		self.normalize.save("normalization_stats.json")
+		self.normalize.save(OUTPUT_DIR + "normalization_stats.json")
 
 	def __len__(self):
 		return len(self.samples)
@@ -72,8 +72,13 @@ class PolicyDataset(Dataset):
 		else:
 			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
 		action = self.normalize.normalize_action(action)
-		return state, image, action
-
+		
+		# Optionally, return action_is_pad if present.
+		if "action_is_pad" in sample:
+			action_is_pad = torch.tensor(sample["action_is_pad"], dtype=torch.bool)
+			return state, image, action, action_is_pad
+		else:
+			return state, image, action
 
 def train():
 	print(f"CUDA is available: {torch.cuda.is_available()}")
@@ -111,7 +116,15 @@ def train():
 
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
-		for state, image, action in dataloader:
+		for batch in dataloader:
+			# Unpack batch. If action_is_pad is provided, batch has 4 elements.
+			if len(batch) == 4:
+				state, image, action, action_is_pad = batch
+				has_mask = True
+			else:
+				state, image, action = batch
+				has_mask = False
+
 			state = state.to(device)  # (batch, 4)
 			image = image.to(device)  # (batch, 3, IMG_RES, IMG_RES)
 			action = action.to(device)
@@ -133,9 +146,22 @@ def train():
 			noise = torch.randn_like(action_seq)
 			x_t = torch.sqrt(alpha_bar) * action_seq + torch.sqrt(1 - alpha_bar) * noise
 
+			# Forward pass: predict noise.
 			noise_pred = model(x_t, t.float(), state, image)
 			weight = torch.sqrt(1 - alpha_bar)
-			loss_elements = mse_loss(noise_pred, noise)
+
+			# Always predict noise; target is noise.
+			target = noise
+
+			# Compute MSE loss between the prediction and target.
+			loss_elements = mse_loss(noise_pred, target)
+
+			# Optionally, mask loss for padded actions if provided.
+			if DO_MASK_LOSS_FOR_PADDING and has_mask:
+				action_is_pad = action_is_pad.to(device)
+				in_episode_bound = ~action_is_pad  # Boolean mask for valid actions.
+				loss_elements = loss_elements * in_episode_bound.unsqueeze(-1)
+
 			loss = torch.mean(weight * loss_elements)
 
 			optimizer.zero_grad()
@@ -155,12 +181,12 @@ def train():
 				grad_norm = param.grad.data.norm(2).item()
 				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
 		csv_writer.writerow([epoch+1, avg_loss])
-		if (epoch + 1) % 100 == 0:
-			torch.save(model.state_dict(), "diffusion_policy.pth")
+		if (epoch + 1) % 10 == 0:
+			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 			print(f"Checkpoint overwritten at epoch {epoch+1}")
 		scheduler.step()
-	torch.save(model.state_dict(), "diffusion_policy.pth")
-	print("Training complete. Model saved as diffusion_policy.pth.")
+	torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
+	print(f"Training complete. Model saved as {OUTPUT_DIR}diffusion_policy.pth.")
 	writer.close()
 	csv_file.close()
 
