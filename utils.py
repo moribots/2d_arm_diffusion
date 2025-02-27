@@ -2,7 +2,9 @@ import math
 import random
 import torch
 import pygame
-from config import SCREEN_WIDTH, SCREEN_HEIGHT
+from config import *
+from datasets import load_dataset
+import os
 
 def random_t_pose():
 	"""
@@ -38,3 +40,51 @@ def draw_arrow(surface, color, start, end, width=3, head_length=10, head_angle=3
 				 end[1] - head_length * math.sin(right_angle))
 	pygame.draw.line(surface, color, end, left_end, width)
 	pygame.draw.line(surface, color, end, right_end, width)
+
+def get_training_data_dir(env_type: str) -> str:
+	if env_type == "lerobot":
+		return "lerobot/" + TRAINING_DATA_DIR
+	else:
+		return "custom/" + TRAINING_DATA_DIR
+
+def recompute_normalization_stats(env_type: str, norm_stats_path: str):
+	"""
+	Recompute normalization statistics. 
+	- For LeRobot environment: loads a dataset from huggingface (lerobot/pusht).
+	- For custom environment: reads *.json in TRAINING_DATA_DIR.
+	"""
+	if env_type == "lerobot":
+		# Login using e.g. `huggingface-cli login` to access this dataset
+		dataset = load_dataset("lerobot/pusht")
+		if dataset is not None:
+			print("Loading training data from LeRobot dataset via load_dataset...")
+			training_samples = list(dataset["train"])
+			print("Recomputing normalization statistics from LeRobot training data...")
+			new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+			new_norm.save(norm_stats_path + "normalization_stats.json")
+		else:
+			print("dataset not available; using existing normalization stats.")
+	else:
+		training_samples = []
+		for filename in os.listdir(get_training_data_dir("custom")):
+			if filename.endswith('.json'):
+				filepath = os.path.join(get_training_data_dir("custom"), filename)
+				with open(filepath, "r") as f:
+					data = json.load(f)
+					training_samples.extend(data)
+		if training_samples:
+			print("Recomputing normalization statistics from custom training data...")
+			new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+			new_norm.save(norm_stats_path + "normalization_stats.json")
+			return new_norm
+		else:
+			print("No custom training samples found; using existing normalization stats.")
+		return None
+
+def compute_ee_velocity(ee_pos: torch.Tensor, prev_ee_pos: torch.Tensor, dt: float) -> torch.Tensor:
+	"""
+	Compute the EE velocity based on the current and previous positions.
+	"""
+	if prev_ee_pos is None:
+		return torch.zeros_like(ee_pos)
+	return (ee_pos - prev_ee_pos) / dt

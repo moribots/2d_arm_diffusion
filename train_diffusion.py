@@ -14,11 +14,8 @@ from einops import rearrange
 from normalize import Normalize  # New normalization helper class
 
 from PIL import Image  # new import for image loading
-
-# For LeRobot dataset loading
-if DATASET_TYPE == "lerobot":
-	from datasets import load_dataset
-	import numpy as np
+from datasets import load_dataset
+import numpy as np
 
 class PolicyDataset(Dataset):
 	"""
