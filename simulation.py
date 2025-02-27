@@ -151,6 +151,7 @@ class LeRobotSimulation(BaseSimulation):
 
 		# Optionally load inference policy
 		self.policy_inference = None
+		self.prev_agent_pos = None
 		if self.mode == "inference":
 			# Load existing data if needed to update normalization stats
 			recompute_normalization_stats(self.env_type, "lerobot/")
@@ -205,6 +206,8 @@ class LeRobotSimulation(BaseSimulation):
 		self.frame_index = 0
 		self.global_index = 0
 		self.episode_start_time = time.time()
+		# Reset previous agent position when a new session starts
+		self.prev_agent_pos = None
 
 		# Gym reset
 		self.observation, info = self.env.reset()
@@ -240,7 +243,14 @@ class LeRobotSimulation(BaseSimulation):
 		else:
 			# Inference mode with policy
 			agent_pos_np = np.array(self.observation["agent_pos"])
-			state = torch.from_numpy(agent_pos_np).float().unsqueeze(0)
+			agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
+			if self.prev_agent_pos is None:
+				# Duplicate if t-1 does not exist.
+				state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
+			else:
+				state = torch.cat([self.prev_agent_pos, agent_pos_tensor], dim=0).unsqueeze(0)
+			# Update previous agent position.
+			self.prev_agent_pos = agent_pos_tensor.clone()
 			image = torch.from_numpy(self.observation["pixels"]).to(torch.float32)
 			image = rearrange(image, 'h w c -> c h w')
 			image_pil = ToPILImage()(image)

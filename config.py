@@ -40,7 +40,7 @@ LINK_COLLISION_WEIGHT = 5.0
 # Training parameters for diffusion policy
 T = 1000
 BATCH_SIZE = 2048
-EPOCHS = 200
+EPOCHS = 600
 LEARNING_RATE = 5e-4
 BETAS = (0.9, 0.999)
 WEIGHT_DECAY = 0.01
@@ -53,8 +53,8 @@ IMAGE_FEATURE_DIM = 32
 
 # Action and condition dimensions
 ACTION_DIM = 2
-# Reverted to 2 (EE-state) + 32 (image features) = 34
-CONDITION_DIM = 2 + IMAGE_FEATURE_DIM
+# 4 EE_t-1, EE_t + 32 (image features) = 36
+CONDITION_DIM = 4 + IMAGE_FEATURE_DIM
 
 # Temporal Parameters
 FPS = 100
