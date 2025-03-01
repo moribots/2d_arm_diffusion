@@ -219,7 +219,6 @@ class LeRobotSimulation(BaseSimulation):
 		Otherwise we consider normal end (like environment done).
 		"""
 		print("LeRobot session ended.")
-		# If forcibly ending, we can mark success as false on the last step, if that suits you
 		# For now, just save the data
 		self.save_le_robot_data()
 		self.session_active = False
@@ -248,16 +247,22 @@ class LeRobotSimulation(BaseSimulation):
 				# Duplicate if t-1 does not exist.
 				state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
 			else:
-				state = torch.cat([self.prev_agent_pos, agent_pos_tensor], dim=0).unsqueeze(0)
+				state = torch.cat([self.prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
 			# Update previous agent position.
 			self.prev_agent_pos = agent_pos_tensor.clone()
-			image = torch.from_numpy(self.observation["pixels"]).to(torch.float32)
-			image = rearrange(image, 'h w c -> c h w')
-			image_pil = ToPILImage()(image)
+
+			# Get the image as a uint8 numpy array, similar to training
+			image_array = self.observation["pixels"]
+			if not isinstance(image_array, np.ndarray):
+				image_array = np.array(image_array, dtype=np.uint8)
+			# Convert the array directly to a PIL image.
+			image_pil = Image.fromarray(image_array)
+			# Apply the same image transform as in training.
 			image_tensor = image_transform(image_pil)
 
 			predicted = self.policy_inference.sample_action(state, image_tensor)[0]
 			action = predicted.cpu().numpy().astype(np.float32)
+
 
 		# Step environment
 		next_observation, reward, done, truncated, info = self.env.step(action)
@@ -267,7 +272,6 @@ class LeRobotSimulation(BaseSimulation):
 		act_list = action.tolist()
 
 		# Log in LeRobot format
-		# We'll treat the environment's done as success, or you could check 'info'.
 		success = bool(done)  # or something more specific
 		self.log_le_robot_step(
 			observation_state=obs_list,
@@ -320,7 +324,6 @@ class CustomSimulation(BaseSimulation):
 		self.last_target = None
 		self.max_target_delta = 10
 
-		# Make a subfolder for images if you store them
 		self.images_dir = os.path.join(self.training_data_dir, "images")
 		os.makedirs(self.images_dir, exist_ok=True)
 
@@ -420,7 +423,7 @@ class CustomSimulation(BaseSimulation):
 			print("Input outside arm workspace => terminating session.")
 			# log the final step with success=False
 			self.log_le_robot_step(
-				observation_state=[0, 0],  # we can store the last known EE pos if you want
+				observation_state=[0, 0],
 				action=target.cpu().numpy().tolist(),
 				reward=0.0,
 				done=True,

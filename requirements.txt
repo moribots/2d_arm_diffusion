@@ -4,3 +4,7 @@ numpy
 scipy
 einops
 torchvision
+datasets
+gymnasium
+gym
+gym_pusht

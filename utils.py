@@ -53,6 +53,7 @@ def recompute_normalization_stats(env_type: str, norm_stats_path: str):
 	- For LeRobot environment: loads a dataset from huggingface (lerobot/pusht).
 	- For custom environment: reads *.json in TRAINING_DATA_DIR.
 	"""
+	print(f'Normalization statistics path: {norm_stats_path}')
 	if env_type == "lerobot":
 		# Login using e.g. `huggingface-cli login` to access this dataset
 		dataset = load_dataset("lerobot/pusht")

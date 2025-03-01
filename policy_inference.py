@@ -72,7 +72,7 @@ class DiffusionPolicyInference:
 		max_clipped = 3.0
 		x_t = torch.randn((1, WINDOW_SIZE+1, ACTION_DIM), device=self.device)
 		# Clip to the same range used in the DDIM sampling
-		x_t = torch.clamp(x_t, -max_clipped, max_clipped)
+		# x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		
 		# Create a reduced set of timesteps for DDIM sampling (from high noise to low noise)
 		ddim_timesteps = np.linspace(0, self.T - 1, num_ddim_steps, dtype=int)
@@ -108,7 +108,7 @@ class DiffusionPolicyInference:
 		
 		# Return the full sequence except for the t-1th action.
 		# After the full denoising process is complete
-		predicted_sequence_normalized = x_t[0, 1:, :]  # Your current code
+		predicted_sequence_normalized = x_t[0, 1:, :]
 
 		# Unnormalize to get actions in environment space
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)

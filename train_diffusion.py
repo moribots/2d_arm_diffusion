@@ -174,7 +174,7 @@ class PolicyDataset(Dataset):
 				image = Image.open(img_path).convert("RGB")
 				image = image_transform(image)
 			else:
-				image = torch.zeros(3, IMG_RES, IMG_RES)
+				raise FileNotFoundError(f"Image file {img_path} not found.")
 
 		# Load action sequence and normalize
 		if "action" not in sample:
