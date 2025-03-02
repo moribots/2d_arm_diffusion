@@ -11,7 +11,7 @@ import os
 import time
 import torch
 from config import *
-from utils import *
+from utils import get_training_data_dir, recompute_normalization_stats
 from arm import ArmNR
 from object import Object
 from policy_inference import DiffusionPolicyInference
@@ -27,8 +27,7 @@ from pyarrow import Table
 
 class BaseSimulation:
 	"""
-	BaseSimulation initializes pygame and handles logging of simulation steps
-	in LeRobot format.
+	BaseSimulation initializes pygame and handles logging simulation steps in a common LeRobot format.
 	"""
 	def __init__(self, mode="collection", env_type="custom"):
 		pygame.init()
@@ -43,7 +42,7 @@ class BaseSimulation:
 		self.task_index = 0
 		self.frame_index = 0
 		self.episode_start_time = 0.0
-		self.le_robot_data = []         # Stores logged steps.
+		self.le_robot_data = []         # List to store logged steps.
 		self.session_active = False
 		self.training_data_dir = get_training_data_dir(self.env_type)
 		os.makedirs(self.training_data_dir, exist_ok=True)
@@ -52,7 +51,7 @@ class BaseSimulation:
 		# Must be implemented by subclasses.
 		raise NotImplementedError
 
-	def log_le_robot_step(self, observation_state, action, reward, done, success):
+	def log_data(self, observation_state, action, reward, done, success):
 		"""
 		Log a single simulation step.
 		"""
@@ -74,13 +73,14 @@ class BaseSimulation:
 		self.frame_index += 1
 		self.global_index += 1
 
-	def save_le_robot_data(self):
+	def save_data(self):
 		"""
 		Save the simulation log to a Parquet file.
 		"""
 		if not self.le_robot_data:
 			print("No data to save.")
 			return
+		# Create a pyarrow Table from the log dictionary.
 		table = Table.from_pydict({k: [step[k] for step in self.le_robot_data] for k in self.le_robot_data[0]})
 		filename = os.path.join(self.training_data_dir, f"{self.env_type}_collection_{int(time.time())}.parquet")
 		base_filename = filename[:-8]
@@ -94,9 +94,9 @@ class BaseSimulation:
 
 class LeRobotSimulation(BaseSimulation):
 	"""
-	LeRobotSimulation implements the simulation using the LeRobot Gym environment.
-	In inference mode, it uses a diffusion policy for action selection.
-	It processes two images (from t-1 and t) for conditioning.
+	LeRobotSimulation uses the LeRobot Gym environment.
+	In inference mode, it uses a diffusion policy for action selection,
+	processing two images (from t-1 and t) for conditioning.
 	"""
 	def __init__(self, mode="collection"):
 		super().__init__(mode=mode, env_type="lerobot")
@@ -140,7 +140,6 @@ class LeRobotSimulation(BaseSimulation):
 			self.clock.tick(FPS)
 
 	def start_session(self):
-		# Reset session state.
 		self.session_active = True
 		self.le_robot_data = []
 		self.episode_index += 1
@@ -154,13 +153,15 @@ class LeRobotSimulation(BaseSimulation):
 
 	def end_session(self, force=False):
 		print("LeRobot session ended.")
-		self.save_le_robot_data()
+		# Commonize: always save log data if in collection mode.
+		if self.mode == "collection":
+			self.save_data()
 		self.session_active = False
 
 	def step_session(self):
 		"""
 		Executes one simulation step.
-		In collection mode, uses mouse input for action.
+		In collection mode, uses mouse input.
 		In inference mode, uses the diffusion policy with two images.
 		"""
 		done = False
@@ -169,10 +170,10 @@ class LeRobotSimulation(BaseSimulation):
 			mouse_pos = pygame.mouse.get_pos()
 			action = np.array([
 				mouse_pos[0] * ACTION_LIM / SCREEN_WIDTH,
-				mouse_pos[1] * ACTION_LIM / SCREEN_HEIGHT],
-				dtype=np.float32)
+				mouse_pos[1] * ACTION_LIM / SCREEN_HEIGHT
+			], dtype=np.float32)
 		else:
-			# Build state from agent positions.
+			# Build state from current and previous agent positions.
 			agent_pos_np = np.array(self.observation["agent_pos"])
 			agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
 			if self.prev_agent_pos is None:
@@ -180,27 +181,25 @@ class LeRobotSimulation(BaseSimulation):
 			else:
 				state = torch.cat([self.prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
 			self.prev_agent_pos = agent_pos_tensor.clone()
-			# Process current image and add batch dimension.
+			# Process current image: add batch dimension.
 			image_array = self.observation["pixels"]
 			if not isinstance(image_array, np.ndarray):
 				image_array = np.array(image_array, dtype=np.uint8)
-			# Unsqueeze to add batch dimension.
 			current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
-			# If no previous image, duplicate current image.
+			# Use previous image if available; otherwise, duplicate.
 			if self.prev_image is None:
 				image_tuple = [current_image_tensor, current_image_tensor]
 			else:
 				image_tuple = [self.prev_image, current_image_tensor]
 			self.prev_image = current_image_tensor.clone()
-			# Use the diffusion policy to sample actions.
 			predicted = self.policy_inference.sample_action(state, image_tuple)[0]
 			action = predicted.cpu().numpy().astype(np.float32)
-		# Step the environment.
+		# Step environment.
 		next_observation, reward, done, truncated, info = self.env.step(action)
 		obs_list = self.observation["agent_pos"].tolist()
 		act_list = action.tolist()
 		success = bool(done)
-		self.log_le_robot_step(obs_list, act_list, float(reward), bool(done), success)
+		self.log_data(obs_list, act_list, float(reward), bool(done), success)
 		img_arr = self.env.render()
 		if img_arr is not None:
 			surface = pygame.surfarray.make_surface(img_arr.swapaxes(0, 1))
@@ -264,6 +263,7 @@ class CustomSimulation(BaseSimulation):
 			self.clock.tick(FPS)
 
 	def start_session(self):
+		# Reset simulation state.
 		self.session_active = True
 		self.le_robot_data = []
 		self.episode_index += 1
@@ -286,7 +286,9 @@ class CustomSimulation(BaseSimulation):
 
 	def end_session(self, force=False):
 		print("Custom session ended.")
-		self.save_le_robot_data()
+		# Commonize: always save log data (if in collection mode).
+		if self.mode == "collection":
+			self.save_data()
 		self.clean_up_temp_images()
 		self.session_active = False
 
@@ -295,14 +297,14 @@ class CustomSimulation(BaseSimulation):
 		target = self.get_target_input()
 		if torch.norm(target - BASE_POS) > ARM_LENGTH:
 			print("Input outside arm workspace => terminating session.")
-			self.log_le_robot_step([0, 0], target.cpu().numpy().tolist(), 0.0, True, False)
+			self.log_data([0, 0], target.cpu().numpy().tolist(), 0.0, True, False)
 			self.end_session(force=True)
 			return
 		self.smoothed_target = self.update_smoothed_target(target)
 		ik_error = self.arm.solve_ik(self.smoothed_target)
 		if not torch.isfinite(torch.tensor(ik_error)) or ik_error > 1e4:
 			print("Invalid IK => terminating session.")
-			self.log_le_robot_step([0, 0], target.cpu().numpy().tolist(), 0.0, True, False)
+			self.log_data([0, 0], target.cpu().numpy().tolist(), 0.0, True, False)
 			self.end_session(force=True)
 			return
 		ee_pos = self.arm.forward_kinematics()
@@ -320,7 +322,7 @@ class CustomSimulation(BaseSimulation):
 		success = bool(done)
 		observation_state = ee_pos.cpu().numpy().tolist()
 		action_list = self.last_target.cpu().numpy().tolist() if self.last_target is not None else [0, 0]
-		self.log_le_robot_step(observation_state, action_list, reward, done, success)
+		self.log_data(observation_state, action_list, reward, done, success)
 		if done:
 			print("Goal reached => ending session.")
 			self.end_session(force=False)
@@ -423,7 +425,6 @@ class CustomSimulation(BaseSimulation):
 			data = pygame.image.tostring(self.screen, 'RGB')
 			pil_img = Image.frombytes('RGB', (SCREEN_WIDTH, SCREEN_HEIGHT), data)
 		current_image_tensor = image_transform(pil_img)
-		# Ensure the image tensor has a batch dimension.
 		if current_image_tensor.dim() == 3:
 			current_image_tensor = current_image_tensor.unsqueeze(0)
 		if self.prev_image is None:

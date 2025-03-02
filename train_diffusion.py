@@ -1,53 +1,100 @@
 """
 Training module for the diffusion policy.
 Defines PolicyDataset that loads samples with two images (t-1 and t) along with corresponding actions.
-Logs training metrics via TensorBoard and CSV.
+Training metrics are logged via TensorBoard and CSV.
 """
 
 import os
-import csv
-import math
+import json
+import csv  # For CSV dumps of training metrics.
+import math  # Needed for cosine annealing if desired.
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter  # For TensorBoard visualization.
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
 from config import *
 from einops import rearrange
-from normalize import Normalize
-from PIL import Image
+from normalize import Normalize  # New normalization helper class
+from PIL import Image  # For image loading and processing
 from datasets import load_dataset
 import numpy as np
 
 def get_chunk_time_encoding(length: int):
 	"""
-	Generate a time encoding tensor that linearly scales from 0 to 1.
+	Returns a 1D tensor of shape (length,) that linearly scales from 0 to 1.
+	This is used to embed each timestep within a chunk.
 	"""
 	return torch.linspace(0, 1, steps=length)
 
 class PolicyDataset(Dataset):
 	"""
-	Dataset class for loading and preprocessing training samples.
+	PolicyDataset loads training samples for the diffusion policy.
 	
-	For LeRobot, samples contain:
+	For LeRobot, it loads the Hugging Face dataset "lerobot/pusht_image",
+	groups frames by episode, and constructs examples with:
 	  - observation.state: two states (t-1 and t)
 	  - observation.image: two images (t-1 and t)
-	  - action: sequence of actions from t-1 to t+WINDOW_SIZE
+	  - action: sequence of actions from t-1 to t+WINDOW_SIZE.
+	
+	For custom data, the dataset now follows the same structure as the LeRobot dataset.
+	It groups samples by episode_index, sorts each episode by frame_index, and then chunks
+	the episode to produce examples.
 	"""
 	def __init__(self, data_dir):
 		self.samples = []
-		self.data_source = None
 		self._chunked_samples = []
 		if DATASET_TYPE == "lerobot":
 			self.data_source = "lerobot"
 			hf_dataset = load_dataset("lerobot/pusht_image", split="train")
+			print(f'Loaded {len(hf_dataset)} samples from LeRobot dataset.')
 			episodes = {}
 			for sample in hf_dataset:
 				ep = sample["episode_index"]
 				episodes.setdefault(ep, []).append(sample)
-			for ep_samples in episodes.values():
+			for ep, ep_samples in episodes.items():
+				ep_samples = sorted(ep_samples, key=lambda s: s["frame_index"])
+				if len(ep_samples) < WINDOW_SIZE + 2:
+					continue
+				for i in range(1, len(ep_samples) - WINDOW_SIZE):
+					obs = {
+						"state": [
+							ep_samples[i-1]["observation.state"],  # State at t-1.
+							ep_samples[i]["observation.state"]       # State at t.
+						],
+						"image": [
+							ep_samples[i-1]["observation.image"],    # Image at t-1.
+							ep_samples[i]["observation.image"]         # Image at t.
+						]
+					}
+					actions = []
+					# Collect actions from t-1 to t+WINDOW_SIZE.
+					for j in range(i - 1, i + WINDOW_SIZE + 1):
+						actions.append(ep_samples[j]["action"])
+					new_sample = {
+						"observation": obs,
+						"action": actions,
+						"time_index": list(range(WINDOW_SIZE + 1))
+					}
+					self._chunked_samples.append(new_sample)
+		else:
+			# Updated custom branch to mirror the lerobot branch.
+			self.data_source = "custom"
+			episodes = {}
+			# Expect custom JSON files to have "episode_index" field.
+			for filename in os.listdir(data_dir):
+				if filename.endswith('.json'):
+					filepath = os.path.join(data_dir, filename)
+					with open(filepath, 'r') as f:
+						data = json.load(f)
+						for sample in data:
+							ep = sample["episode_index"]
+							episodes.setdefault(ep, []).append(sample)
+			# Process episodes similar to the lerobot branch.
+			print(f'Loaded {len(episodes)} episodes from custom dataset.')
+			for ep, ep_samples in episodes.items():
 				ep_samples = sorted(ep_samples, key=lambda s: s["frame_index"])
 				if len(ep_samples) < WINDOW_SIZE + 2:
 					continue
@@ -71,46 +118,9 @@ class PolicyDataset(Dataset):
 						"time_index": list(range(WINDOW_SIZE + 1))
 					}
 					self._chunked_samples.append(new_sample)
-		else:
-			self.data_source = "custom"
-			episodes = []
-			for filename in os.listdir(data_dir):
-				if filename.endswith('.json'):
-					filepath = os.path.join(data_dir, filename)
-					with open(filepath, 'r') as f:
-						data = json.load(f)
-						episodes.extend(data)
-			episodes_sorted = sorted(episodes, key=lambda s: s.get("frame_index", 0))
-			for i in range(len(episodes_sorted) - WINDOW_SIZE):
-				chunk = episodes_sorted[i : i + WINDOW_SIZE + 1]
-				if len(chunk) < WINDOW_SIZE + 1:
-					continue
-				obs = {}
-				if "observation" in chunk[0] and "observation" in chunk[1]:
-					obs["state"] = [
-						chunk[0]["observation"].get("state", [0.0, 0.0]),
-						chunk[1]["observation"].get("state", [0.0, 0.0])
-					]
-					obs["image"] = [
-						chunk[0]["observation"].get("image", ""),
-						chunk[1]["observation"].get("image", "")
-					]
-				else:
-					continue
-				actions = []
-				for step in chunk:
-					actions.append(step.get("action", [0.0, 0.0]))
-				time_idx = list(range(len(actions)))
-				new_sample = {
-					"observation": obs,
-					"action": actions,
-					"time_index": time_idx
-				}
-				self._chunked_samples.append(new_sample)
-		# Create output directory.
 		os.makedirs(OUTPUT_DIR + self.data_source, exist_ok=True)
-		# Compute and save normalization statistics using Parquet.
 		self.normalize = Normalize.compute_from_samples(self._chunked_samples)
+		# Save normalization stats using Parquet.
 		self.normalize.save(OUTPUT_DIR + self.data_source + "/" + "normalization_stats.parquet")
 
 	def __len__(self):
@@ -121,11 +131,11 @@ class PolicyDataset(Dataset):
 		obs = sample["observation"]
 		if "state" not in obs:
 			raise KeyError("Sample must contain observation['state']")
-		# Process state.
+		# Convert state to tensor and flatten it.
 		state_raw = torch.tensor(obs["state"], dtype=torch.float32)
-		state_flat = state_raw.flatten()
+		state_flat = state_raw.flatten()  # Expected shape: (4,)
 		condition = self.normalize.normalize_condition(state_flat)
-		# Process two images.
+		# Load two images.
 		if self.data_source == "lerobot":
 			image_array0 = obs["image"][0]
 			image_array1 = obs["image"][1]
@@ -163,7 +173,7 @@ class PolicyDataset(Dataset):
 		else:
 			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
 		action = self.normalize.normalize_action(action)
-		# Process time indices.
+		# Build local time sequence.
 		if "time_index" in sample:
 			time_idx = torch.tensor(sample["time_index"], dtype=torch.float32)
 			max_t = float(time_idx[-1]) if time_idx[-1] > 0 else 1.0
@@ -174,8 +184,8 @@ class PolicyDataset(Dataset):
 
 def train():
 	"""
-	Train the diffusion policy model.
-	Logs metrics using TensorBoard and CSV, and saves checkpoints.
+	Train the diffusion policy model using PolicyDataset.
+	Metrics are logged via TensorBoard and CSV.
 	"""
 	print(f"CUDA is available: {torch.cuda.is_available()}")
 	writer = SummaryWriter(log_dir="runs/diffusion_policy_training")
@@ -242,13 +252,11 @@ def train():
 			else:
 				raise ValueError("Unexpected shape for action tensor")
 
-			# Diffusion step: sample a timestep and add noise.
 			t_tensor = torch.randint(0, T, (action_seq.size(0),), device=device)
 			alpha_bar = rearrange(alphas_cumprod[t_tensor], 'b -> b 1 1')
 			noise = torch.randn_like(action_seq)
 			x_t = torch.sqrt(alpha_bar) * action_seq + torch.sqrt(1 - alpha_bar) * noise
 
-			# Forward pass: predict noise.
 			noise_pred = model(x_t, t_tensor.float(), state, image)
 			weight = torch.sqrt(1 - alpha_bar)
 			loss_elements = mse_loss(noise_pred, noise)

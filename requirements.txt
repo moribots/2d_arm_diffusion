@@ -8,3 +8,4 @@ gym-pusht>=0.0.1
 datasets>=2.0
 Pillow>=9.0
 numpy>=1.21
+tensorboard>=2.8
