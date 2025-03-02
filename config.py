@@ -55,9 +55,13 @@ LINK_COLLISION_WEIGHT = 5.0
 T = 1000
 BATCH_SIZE = 832
 EPOCHS = 900
-LEARNING_RATE = 2e-4
-BETAS = (0.9, 0.999)
-WEIGHT_DECAY = 0.01
+# Settings from: https://github.com/huggingface/lerobot/blob/main/lerobot/common/policies/diffusion/configuration_diffusion.py#L154-L160
+OPTIMIZER_LR = 1e-4
+OPTIMIZER_BETAS = (0.95, 0.999)
+OPTIMIZER_EPS = 1e-8
+OPTIMIZER_WEIGHT_DECAY = 1e-6
+SCHEDULER_NAME = "cosine"
+SCHEDULER_WARMUP_STEPS = 500
 
 # Temporal window size for action sequence.
 WINDOW_SIZE = 14

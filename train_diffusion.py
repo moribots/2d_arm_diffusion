@@ -214,8 +214,24 @@ def train():
 		print(f"Using {torch.cuda.device_count()} GPUs for training.")
 		model = nn.DataParallel(model)
 
-	optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, betas=BETAS, weight_decay=WEIGHT_DECAY)
-	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+	optimizer = optim.AdamW(
+			model.parameters(),
+			lr=OPTIMIZER_LR,
+			betas=OPTIMIZER_BETAS,
+			eps=OPTIMIZER_EPS,
+			weight_decay=OPTIMIZER_WEIGHT_DECAY
+	)
+
+	# Warmup + cosine annealing scheduler.
+	total_steps = EPOCHS * len(dataloader)
+	def lr_lambda(current_step):
+			if current_step < SCHEDULER_WARMUP_STEPS:
+					return float(current_step) / float(max(1, SCHEDULER_WARMUP_STEPS))
+			# Cosine annealing after warmup.
+			progress = float(current_step - SCHEDULER_WARMUP_STEPS) / float(max(1, total_steps - SCHEDULER_WARMUP_STEPS))
+			return 0.5 * (1.0 + math.cos(math.pi * progress))
+	scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
 	mse_loss = nn.MSELoss(reduction="none")
 
 	betas = get_beta_schedule(T)
