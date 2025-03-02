@@ -222,15 +222,8 @@ def train():
 			weight_decay=OPTIMIZER_WEIGHT_DECAY
 	)
 
-	# Warmup + cosine annealing scheduler.
-	total_steps = EPOCHS * len(dataloader)
-	def lr_lambda(current_step):
-			if current_step < SCHEDULER_WARMUP_STEPS:
-					return float(current_step) / float(max(1, SCHEDULER_WARMUP_STEPS))
-			# Cosine annealing after warmup.
-			progress = float(current_step - SCHEDULER_WARMUP_STEPS) / float(max(1, total_steps - SCHEDULER_WARMUP_STEPS))
-			return 0.5 * (1.0 + math.cos(math.pi * progress))
-	scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+	# Cosine Annealing Scheduler
+	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
 	mse_loss = nn.MSELoss(reduction="none")
 
