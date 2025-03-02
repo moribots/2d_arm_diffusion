@@ -19,7 +19,8 @@ from diffusion_policy import DiffusionPolicy, UNet1D, DownBlock, UpBlock, FiLMBl
 from visual_encoder import VisualEncoder
 from policy_inference import DiffusionPolicyInference
 from train_diffusion import PolicyDataset
-from simulation import BaseSimulation, LeRobotSimulation, CustomSimulation, compute_ee_velocity
+from simulation import *
+from utils import *
 import tempfile
 
 class TestConfig(unittest.TestCase):
