@@ -97,3 +97,64 @@ DO_MASK_LOSS_FOR_PADDING = True
 # Dataset and environment type settings.
 DATASET_TYPE = "lerobot"      # Options: "custom", "lerobot"
 LE_ROBOT_GYM_ENV_NAME = "gym_pusht/PushT-v0"
+
+def print_settings():
+	settings = {
+		'Screen Settings': {
+			'Width': SCREEN_WIDTH,
+			'Height': SCREEN_HEIGHT,
+			'Action Limit': ACTION_LIM,
+			'Background Color': BACKGROUND_COLOR
+		},
+		'Colors': {
+			'Arm': ARM_COLOR,
+			'T Object': T_COLOR,
+			'Goal T': GOAL_T_COLOR
+		},
+		'Arm Parameters': {
+			'End Effector Radius': EE_RADIUS,
+			'Link Lengths': LINK_LENGTHS,
+			'Initial Angles': INITIAL_ANGLES,
+			'Number of Joints': NUM_JOINTS,
+			'Total Arm Length': ARM_LENGTH,
+			'Base Position': BASE_POS.tolist()
+		},
+		'Physics Parameters': {
+			'Contact Stiffness': K_CONTACT,
+			'Object Mass': M_T,
+			'Linear Damping': LINEAR_DAMPING,
+			'Angular Damping': ANGULAR_DAMPING,
+			'Damping Constant': K_DAMPING
+		},
+		'Training Parameters': {
+			'Time Steps': T,
+			'Batch Size': BATCH_SIZE,
+			'Epochs': EPOCHS,
+			'Learning Rate': OPTIMIZER_LR,
+			'Window Size': WINDOW_SIZE,
+			'Feature Dimensions': {
+				'Image': IMAGE_FEATURE_DIM,
+				'Condition': CONDITION_DIM,
+				'Action': ACTION_DIM
+			}
+		},
+		'Temporal Parameters': {
+			'FPS': FPS,
+			'Seconds per Sample': SEC_PER_SAMPLE,
+			'Demo Frames': DEMO_DATA_FRAMES,
+			'Image Resolution': IMG_RES
+		}
+	}
+
+	print("\nConfiguration Settings:")
+	print("=" * 50)
+	for category, params in settings.items():
+		print(f"\n{category}:")
+		print("-" * 30)
+		for key, value in params.items():
+			if isinstance(value, dict):
+				print(f"{key}:")
+				for subkey, subvalue in value.items():
+					print(f"  {subkey}: {subvalue}")
+			else:
+				print(f"{key}: {value}")

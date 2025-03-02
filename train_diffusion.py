@@ -44,6 +44,7 @@ class PolicyDataset(Dataset):
 	the episode to produce examples.
 	"""
 	def __init__(self, data_dir):
+		print_settings()
 		self.samples = []
 		self._chunked_samples = []
 		if DATASET_TYPE == "lerobot":
