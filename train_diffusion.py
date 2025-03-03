@@ -284,7 +284,8 @@ def train():
 	  - Saves model checkpoints periodically.
 	"""
 	# Retrieve the WandB API key from the environment variable
-	api_key = os.environ.get("WANDB_API_KEY")
+	secret_label = "WANDB_API_KEY"
+	api_key = UserSecretsClient().get_secret(secret_label)
 
 	if api_key is None:
 		print("WANDB_API_KEY is not set. Please add it as a Kaggle secret.")
