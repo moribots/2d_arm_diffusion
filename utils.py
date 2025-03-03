@@ -95,7 +95,7 @@ def recompute_normalization_stats(env_type: str, norm_stats_path: str):
 			print("Loading training data from LeRobot dataset...")
 			training_samples = list(dataset["train"])
 			print("Recomputing normalization statistics...")
-			new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+			new_norm = __import__("normalize").Normalize.compute_from_limits()
 			new_norm.save(norm_stats_path + "normalization_stats.parquet")
 		else:
 			print("Dataset not available; using existing normalization stats.")
@@ -109,7 +109,7 @@ def recompute_normalization_stats(env_type: str, norm_stats_path: str):
 					training_samples.extend(data)
 		if training_samples:
 			print("Recomputing normalization statistics from custom training data...")
-			new_norm = __import__("normalize").Normalize.compute_from_samples(training_samples)
+			new_norm = __import__("normalize").Normalize.compute_from_limits()
 			new_norm.save(norm_stats_path + "normalization_stats.parquet")
 			return new_norm
 		else:

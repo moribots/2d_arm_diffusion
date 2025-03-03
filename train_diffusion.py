@@ -123,7 +123,7 @@ class PolicyDataset(Dataset):
 					}
 					self._chunked_samples.append(new_sample)
 		os.makedirs(OUTPUT_DIR + self.data_source, exist_ok=True)
-		self.normalize = Normalize.compute_from_samples(self._chunked_samples)
+		self.normalize = Normalize.compute_from_limits()
 		self.normalize.save(OUTPUT_DIR + self.data_source + "/" + "normalization_stats.parquet")
 
 	def __len__(self):
