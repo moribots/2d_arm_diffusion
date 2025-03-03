@@ -371,7 +371,7 @@ def train():
 		running_loss = 0.0
 
 		# Loop over batches.
-		for batch in dataloader:
+		for batch_idx, batch in enumerate(dataloader):
 			# Missing key check.
 			if len(batch) != 4:
 				print("Malformed batch, skipping.")
@@ -438,6 +438,12 @@ def train():
 			optimizer.step()
 
 			running_loss += loss.item() * action_seq.size(0)
+
+			# Add batch-level logging (optional)
+			wandb.log({
+				"batch_loss": loss.item(),
+				"global_step": epoch * len(dataloader) + batch_idx
+			})
 
 		# Compute average loss for the epoch.
 		avg_loss = running_loss / len(dataset)
