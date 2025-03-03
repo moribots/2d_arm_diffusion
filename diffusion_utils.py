@@ -4,19 +4,34 @@ Utility functions for the diffusion process.
 
 import torch
 
-def get_beta_schedule(T, beta_start=1e-4, beta_end=0.02):
+def get_beta_schedule(T: int, s: float = 0.008) -> torch.Tensor:
 	"""
-	Generate a linear schedule of beta values for diffusion.
-	
+	Generate a beta schedule using a squared cosine schedule as described in
+	"Improved Denoising Diffusion Probabilistic Models".
+
+	The schedule computes the cumulative product alpha_bar(t) using:
+		alpha_bar(t) = cos(((t/T + s) / (1+s)) * (pi/2))^2,
+	and then defines beta_t = 1 - alpha_bar(t+1) / alpha_bar(t) for t = 0,...,T-1.
+
 	Args:
-		T (int): Number of timesteps.
-		beta_start (float): Starting beta value.
-		beta_end (float): Ending beta value.
-	
+		T (int): Total number of diffusion timesteps.
+		s (float): Small offset for stability (default: 0.008).
+
 	Returns:
-		Tensor: Beta schedule of shape (T,).
+		torch.Tensor: Beta schedule of shape (T,). Each beta is clamped to at most 0.999.
 	"""
-	return torch.linspace(beta_start, beta_end, T)
+	# Generate T+1 linearly spaced time points from 0 to T (inclusive)
+	timesteps = torch.linspace(0, T, T + 1)
+	# Compute cumulative product of alphas using the squared cosine function
+	alpha_bar = torch.cos(((timesteps / T + s) / (1 + s)) * (torch.pi / 2)) ** 2
+	betas = []
+	for t in range(T):
+		# Compute beta_t as the relative drop between consecutive alpha_bar values
+		beta = 1 - (alpha_bar[t + 1] / alpha_bar[t])
+		# Clamp beta to prevent numerical issues
+		beta = min(beta.item(), 0.999)
+		betas.append(beta)
+	return torch.tensor(betas, dtype=torch.float32)
 
 def compute_alphas(betas):
 	"""

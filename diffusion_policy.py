@@ -107,30 +107,19 @@ class DiffusionTimeEmbedding(nn.Module):
 
 class FiLM(nn.Module):
 	"""
-	FiLM conditioning module that outputs both scale and bias parameters.
+	FiLM conditioning module that outputs bias (and optionally scale) modulation parameters.
 	
 	This layer takes a conditioning vector and produces per-channel modulation parameters.
 	"""
 	def __init__(self, channels: int, cond_dim: int):
 		super().__init__()
-		# Output both scale and bias per channel.
-		self.fc = nn.Linear(cond_dim, channels * 2)
+		# Produce only bias modulation parameters.
+		self.fc = nn.Linear(cond_dim, channels)
 
 	def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-		"""
-		Args:
-			x (Tensor): Input tensor of shape (B, C, T).
-			cond (Tensor): Conditioning tensor of shape (B, cond_dim).
-		Returns:
-			Tensor: Modulated tensor, of shape (B, C, T).
-		"""
-		# Compute scale and bias.
-		gamma_beta = self.fc(cond)  # Shape: (B, C*2)
-		gamma, beta = rearrange(gamma_beta, 'b (c n) -> n b c', n=2)  # Each shape: (B, C)
-		gamma = gamma.unsqueeze(-1)  # (B, C, 1)
-		beta = beta.unsqueeze(-1)    # (B, C, 1)
-		# Apply FiLM modulation.
-		return (1 + gamma) * x + beta
+		# Compute bias modulation and add to the input feature map.
+		bias = self.fc(cond).unsqueeze(-1)  # Shape: (B, channels, 1)
+		return x + bias
 
 class ResidualBlock1D(nn.Module):
 	"""
@@ -200,105 +189,105 @@ class ResidualBlock1D(nn.Module):
 
 class UNet1D(nn.Module):
 	"""
-	A 1D U-Net for denoising a temporal action sequence using multiple residual blocks per stage.
+	A deep 1D U-Net for denoising temporal action sequences. This implementation 
+	increases the depth by adding an extra encoder and decoder stage to better capture 
+	complex visuomotor dynamics.
 
-	The network architecture is an encoder-decoder with skip connections:
-	  - Initial convolution converts input sequence from (B, T, action_dim) to (B, action_dim, T).
-	  - Encoder:
-		  Stage 1: Two residual blocks -> skip connection -> downsampling.
-		  Stage 2: Two residual blocks -> skip connection -> downsampling.
-	  - Bottleneck: Two residual blocks.
-	  - Decoder:
-		  Stage 2: Upsampling -> concatenate skip connection from encoder stage 2 -> Two residual blocks.
-		  Stage 1: Upsampling -> concatenate skip connection from encoder stage 1 -> Two residual blocks.
-	  - Final convolution projects features back to the action dimension.
+	Architecture Diagram:
+		Input (B, T, action_dim)
+				|
+		[Rearrange: (B, action_dim, T)]
+				|
+		 Initial Conv (Conv1d)
+				|
+		 Encoder Stage 1:
+			- 2 x ResidualBlock1D (hidden_dim)
+			- Save skip1, then Downsample (Conv1d, stride=2) -> hidden_dim * 2
+				|
+		 Encoder Stage 2:
+			- 2 x ResidualBlock1D (hidden_dim * 2)
+			- Save skip2, then Downsample (Conv1d, stride=2) -> hidden_dim * 4
+				|
+		 Encoder Stage 3:
+			- 2 x ResidualBlock1D (hidden_dim * 4)
+			- Save skip3, then Downsample (Conv1d, stride=2) -> hidden_dim * 8
+				|
+		 Bottleneck:
+			- 2 x ResidualBlock1D (hidden_dim * 8)
+				|
+		 Decoder Stage 3:
+			- Upsample (ConvTranspose1d)
+			- Concatenate skip3
+			- 2 x ResidualBlock1D (reduce channels to hidden_dim * 4)
+				|
+		 Decoder Stage 2:
+			- Upsample (ConvTranspose1d)
+			- Concatenate skip2
+			- 2 x ResidualBlock1D (reduce channels to hidden_dim * 2)
+				|
+		 Decoder Stage 1:
+			- Upsample (ConvTranspose1d)
+			- Concatenate skip1
+			- 2 x ResidualBlock1D (reduce channels to hidden_dim)
+				|
+		 Final Conv (Conv1d) to project to action_dim
+				|
+		 [Rearrange back to (B, T, action_dim)]
+				|
+		 Output
 
-	Diagram:
-	   Input (B, T, action_dim)
-				  |
-		 [Rearrange: (B, action_dim, T)]
-				  |
-			Initial Conv
-				  |
-	   +----------------------+
-	   |   Encoder Stage 1    |  
-	   |  [ResBlock x2]       |
-	   |      Skip1           |
-	   +----------------------+
-				  |
-			 Downsample1
-				  |
-	   +----------------------+
-	   |   Encoder Stage 2    |
-	   |  [ResBlock x2]       |
-	   |      Skip2           |
-	   +----------------------+
-				  |
-			 Downsample2
-				  |
-		 [Bottleneck: ResBlock x2]
-				  |
-			 Upsample2
-				  |
-		   Concatenate Skip2
-				  |
-		  [ResBlock x2 Decoder]
-				  |
-			 Upsample1
-				  |
-		   Concatenate Skip1
-				  |
-		  [ResBlock x2 Decoder]
-				  |
-			Final Convolution
-				  |
-		 Rearrange: (B, T, action_dim)
-				  |
-			   Output
-				  
-	Attributes:
-		initial_conv (nn.Conv1d): Initial convolution layer.
-		down_block1_1, down_block1_2 (ResidualBlock1D): Residual blocks for encoder stage 1.
-		downsample1 (nn.Conv1d): Downsampling after stage 1.
-		down_block2_1, down_block2_2 (ResidualBlock1D): Residual blocks for encoder stage 2.
-		downsample2 (nn.Conv1d): Downsampling after stage 2.
-		bottleneck_block1, bottleneck_block2 (ResidualBlock1D): Bottleneck residual blocks.
-		up_block2_1, up_block2_2 (ResidualBlock1D): Residual blocks for decoder stage 2.
-		upsample2 (nn.ConvTranspose1d): Upsampling for decoder stage 2.
-		up_block1_1, up_block1_2 (ResidualBlock1D): Residual blocks for decoder stage 1.
-		upsample1 (nn.ConvTranspose1d): Upsampling for decoder stage 1.
-		final_conv (nn.Conv1d): Final convolution to project back to action dimension.
+	Args:
+		action_dim (int): Dimensionality of the action space.
+		cond_dim (int): Dimensionality of the conditioning vector.
+		hidden_dim (int): Base hidden dimension (default: 64).
 	"""
-	def __init__(self, action_dim: int, cond_dim: int, hidden_dim: int = 64):
+	def __init__(self, action_dim: int, cond_dim: int, hidden_dim: int = 512):
 		super().__init__()
-		# Convert input (B, T, action_dim) to (B, action_dim, T)
-		# Initial convolution.
+		# Initial convolution: action_dim -> hidden_dim (512)
 		self.initial_conv = nn.Conv1d(action_dim, hidden_dim, kernel_size=3, padding=1)
 		
-		# Encoder: Two stages, each with two residual blocks.
-		self.down_block1_1 = ResidualBlock1D(hidden_dim, hidden_dim * 2, cond_dim)
-		self.down_block1_2 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
-		self.downsample1 = nn.Conv1d(hidden_dim * 2, hidden_dim * 2, kernel_size=3, stride=2, padding=1)
-
-		self.down_block2_1 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 4, cond_dim)
-		self.down_block2_2 = ResidualBlock1D(hidden_dim * 4, hidden_dim * 4, cond_dim)
-		self.downsample2 = nn.Conv1d(hidden_dim * 4, hidden_dim * 4, kernel_size=3, stride=2, padding=1)
+		# Encoder Stage 1: 2 blocks at 512 channels, then downsample with stride=2 (channels remain 512)
+		self.enc1_block1 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
+		self.enc1_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
+		self.down1 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=2, padding=1)
 		
-		# Bottleneck: two residual blocks.
+		# Encoder Stage 2: Convert from 512 to 1024 channels
+		self.enc2_block1 = ResidualBlock1D(hidden_dim, hidden_dim * 2, cond_dim)
+		self.enc2_block2 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
+		self.down2 = nn.Conv1d(hidden_dim * 2, hidden_dim * 2, kernel_size=3, stride=2, padding=1)
+		
+		# --- Encoder Stage 3: add an extra downsampling layer ---
+		# Convert from 1024 to 2048 channels.
+		self.enc3_block1 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 4, cond_dim)
+		self.enc3_block2 = ResidualBlock1D(hidden_dim * 4, hidden_dim * 4, cond_dim)
+		# Downsampling stage 3: reduce temporal dimension further.
+		self.down3 = nn.Conv1d(hidden_dim * 4, hidden_dim * 4, kernel_size=3, stride=2, padding=1)
+		
+		# --- Bottleneck remains the same ---
 		self.bottleneck_block1 = ResidualBlock1D(hidden_dim * 4, hidden_dim * 4, cond_dim)
 		self.bottleneck_block2 = ResidualBlock1D(hidden_dim * 4, hidden_dim * 4, cond_dim)
 		
-		# Decoder: Two stages, each with two residual blocks and upsampling.
-		self.up_block2_1 = ResidualBlock1D(hidden_dim * 4 + hidden_dim * 4, hidden_dim * 2, cond_dim)
-		self.up_block2_2 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
-		self.upsample2 = nn.ConvTranspose1d(hidden_dim * 4, hidden_dim * 4, kernel_size=4, stride=2, padding=1)
+		# --- Decoder Stage 3: Invert the third downsampling ---
+		self.up3 = nn.ConvTranspose1d(hidden_dim * 4, hidden_dim * 4, kernel_size=4, stride=2, padding=1)
+		# After up3, the skip from stage 3 has 2048 channels; concatenation yields 4096 channels.
+		self.dec3_block1 = ResidualBlock1D(hidden_dim * 4 + hidden_dim * 4, hidden_dim * 2, cond_dim)
+		self.dec3_block2 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
 		
-		self.up_block1_1 = ResidualBlock1D(hidden_dim * 2 + hidden_dim * 2, hidden_dim, cond_dim)
-		self.up_block1_2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
-		self.upsample1 = nn.ConvTranspose1d(hidden_dim * 2, hidden_dim * 2, kernel_size=3, stride=2, padding=1)
+		# --- Decoder Stage 2: Invert the second downsampling ---
+		self.up2 = nn.ConvTranspose1d(hidden_dim * 2, hidden_dim * 2, kernel_size=4, stride=2, padding=1)
+		# Skip from stage 2 has 1024 channels; concatenation yields 2048 channels.
+		self.dec2_block1 = ResidualBlock1D(hidden_dim * 2 + hidden_dim * 2, hidden_dim, cond_dim)
+		self.dec2_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
 		
-		# Final projection.
+		# --- Decoder Stage 1: Invert the first downsampling ---
+		self.up1 = nn.ConvTranspose1d(hidden_dim, hidden_dim, kernel_size=3, stride=2, padding=1, output_padding=0)
+		# Skip from stage 1 has 512 channels; concatenation yields 1024 channels.
+		self.dec1_block1 = ResidualBlock1D(hidden_dim + hidden_dim, hidden_dim, cond_dim)
+		self.dec1_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
+		
+		# Final projection remains unchanged.
 		self.final_conv = nn.Conv1d(hidden_dim, action_dim, kernel_size=3, padding=1)
+
 
 	def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
 		"""
@@ -308,42 +297,55 @@ class UNet1D(nn.Module):
 		Returns:
 			Tensor: Output tensor of shape (B, T, action_dim).
 		"""
-		# Rearrange to (B, action_dim, T).
+		# Rearrange input to (B, action_dim, T)
 		x = rearrange(x, 'b t a -> b a t')
+		
+		# Initial convolution.
 		x0 = self.initial_conv(x)
 		
-		# Encoder stage 1.
-		x1 = self.down_block1_1(x0, cond)
-		x1 = self.down_block1_2(x1, cond)
-		skip1 = x1  # Save for skip connection.
-		x1_down = self.downsample1(x1)
+		# Encoder Stage 1.
+		x1 = self.enc1_block1(x0, cond)
+		x1 = self.enc1_block2(x1, cond)
+		skip1 = x1  # Skip from stage 1 (channels: hidden_dim)
+		x1_down = self.down1(x1)
 		
-		# Encoder stage 2.
-		x2 = self.down_block2_1(x1_down, cond)
-		x2 = self.down_block2_2(x2, cond)
-		skip2 = x2  # Save for skip connection.
-		x2_down = self.downsample2(x2)
+		# Encoder Stage 2.
+		x2 = self.enc2_block1(x1_down, cond)
+		x2 = self.enc2_block2(x2, cond)
+		skip2 = x2  # Skip from stage 2 (channels: hidden_dim*2)
+		x2_down = self.down2(x2)
+		
+		# Encoder Stage 3.
+		x3 = self.enc3_block1(x2_down, cond)
+		x3 = self.enc3_block2(x3, cond)
+		skip3 = x3  # Skip from stage 3 (channels: hidden_dim*4)
+		x3_down = self.down3(x3)  # Further downsample; temporal dimension reduced.
 		
 		# Bottleneck.
-		x_b = self.bottleneck_block1(x2_down, cond)
-		x_b = self.bottleneck_block2(x_b, cond)
+		xb = self.bottleneck_block1(x3_down, cond)
+		xb = self.bottleneck_block2(xb, cond)
 		
-		# Decoder stage 2.
-		# Upsample and concatenate skip from encoder stage 2.
-		x_up2 = self.upsample2(x_b)
-		# Ensure dimensions match for concatenation.
+		# Decoder Stage 3.
+		x_up3 = self.up3(xb)  # Upsample: restores temporal dimension from down3.
+		# No need for interpolation if input sizes were chosen correctly.
+		x_up3 = torch.cat([x_up3, skip3], dim=1)
+		x_up3 = self.dec3_block1(x_up3, cond)
+		x_up3 = self.dec3_block2(x_up3, cond)
+		
+		# Decoder Stage 2.
+		x_up2 = self.up2(x_up3)  # Upsample: restores temporal dimension from down2.
 		x_up2 = torch.cat([x_up2, skip2], dim=1)
-		x_up2 = self.up_block2_1(x_up2, cond)
-		x_up2 = self.up_block2_2(x_up2, cond)
+		x_up2 = self.dec2_block1(x_up2, cond)
+		x_up2 = self.dec2_block2(x_up2, cond)
 		
-		# Decoder stage 1.
-		x_up1 = self.upsample1(x_up2)
+		# Decoder Stage 1.
+		x_up1 = self.up1(x_up2)  # Upsample: restores temporal dimension from down1.
 		x_up1 = torch.cat([x_up1, skip1], dim=1)
-		x_up1 = self.up_block1_1(x_up1, cond)
-		x_up1 = self.up_block1_2(x_up1, cond)
+		x_up1 = self.dec1_block1(x_up1, cond)
+		x_up1 = self.dec1_block2(x_up1, cond)
 		
+		# Final projection and rearrange output back to (B, T, action_dim)
 		out = self.final_conv(x_up1)
-		# Rearrange back to (B, T, action_dim).
 		out = rearrange(out, 'b a t -> b t a')
 		return out
 
@@ -374,7 +376,7 @@ class DiffusionPolicy(nn.Module):
 		self.global_cond_dim = combined_dim + time_embed_dim  # 132 + 128 = 260.
 
 		# Use the U-Net for denoising.
-		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=64)
+		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=512)
 
 	def forward(self, x, t, state, image):
 		"""
