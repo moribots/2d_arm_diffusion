@@ -47,7 +47,7 @@ class DiffusionPolicyInference:
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.no_grad()
-	def sample_action(self, state, image, num_ddim_steps=100):
+	def sample_action(self, state, image, num_ddim_steps=20):
 		"""
 		Generate a predicted action sequence using DDIM sampling.
 
@@ -63,7 +63,7 @@ class DiffusionPolicyInference:
 		# Normalize the state.
 		state = self.normalize.normalize_condition(state)
 		eps = 1e-5
-		max_clipped = 3.0
+		max_clipped = 1.0
 		# Create initial noise tensor with explicit integer dimensions.
 		x_t = torch.randn((int(1), int(WINDOW_SIZE + 1), int(ACTION_DIM)), device=self.device)
 		ddim_timesteps = np.linspace(0, self.T - 1, num_ddim_steps, dtype=int)

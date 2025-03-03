@@ -1,13 +1,22 @@
 """
 Training module for the diffusion policy.
-Defines PolicyDataset that loads samples with two images (t-1 and t) along with corresponding actions.
-Training metrics are logged via TensorBoard and CSV.
+This module loads training samples (with two images per sample for conditioning)
+and trains the DiffusionPolicy network.
+Training metrics are logged via TensorBoard and CSV, and normalization statistics
+are saved in Parquet format.
+
+Updates for loss computation:
+  - Supports configurable prediction type ("epsilon" vs. "sample"). When using "epsilon",
+	the network is trained to predict the noise added to the action sequence.
+  - Applies a per-sample weighting factor (sqrt(1 - alpha_bar)) to the loss.
+  - Optionally masks the loss for padded regions in the action sequence.
+  - Restricts diffusion timesteps to a middle range (t_min to t_max) to prevent trivial targets.
 """
 
 import os
 import json
 import csv  # For CSV dumps of training metrics.
-import math  # Needed for cosine annealing if desired.
+import math  # For cosine annealing scheduler.
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -17,8 +26,8 @@ from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
 from config import *
 from einops import rearrange
-from normalize import Normalize  # New normalization helper class
-from PIL import Image  # For image loading and processing
+from normalize import Normalize  # Normalization helper class.
+from PIL import Image  # For image loading and processing.
 from datasets import load_dataset
 import numpy as np
 
@@ -39,9 +48,7 @@ class PolicyDataset(Dataset):
 	  - observation.image: two images (t-1 and t)
 	  - action: sequence of actions from t-1 to t+WINDOW_SIZE.
 	
-	For custom data, the dataset now follows the same structure as the LeRobot dataset.
-	It groups samples by episode_index, sorts each episode by frame_index, and then chunks
-	the episode to produce examples.
+	For custom data, the dataset follows a similar structure.
 	"""
 	def __init__(self, data_dir):
 		print_settings()
@@ -62,16 +69,15 @@ class PolicyDataset(Dataset):
 				for i in range(1, len(ep_samples) - WINDOW_SIZE):
 					obs = {
 						"state": [
-							ep_samples[i-1]["observation.state"],  # State at t-1.
-							ep_samples[i]["observation.state"]       # State at t.
+							ep_samples[i-1]["observation.state"],
+							ep_samples[i]["observation.state"]
 						],
 						"image": [
-							ep_samples[i-1]["observation.image"],    # Image at t-1.
-							ep_samples[i]["observation.image"]         # Image at t.
+							ep_samples[i-1]["observation.image"],
+							ep_samples[i]["observation.image"]
 						]
 					}
 					actions = []
-					# Collect actions from t-1 to t+WINDOW_SIZE.
 					for j in range(i - 1, i + WINDOW_SIZE + 1):
 						actions.append(ep_samples[j]["action"])
 					new_sample = {
@@ -81,10 +87,8 @@ class PolicyDataset(Dataset):
 					}
 					self._chunked_samples.append(new_sample)
 		else:
-			# Updated custom branch to mirror the lerobot branch.
 			self.data_source = "custom"
 			episodes = {}
-			# Expect custom JSON files to have "episode_index" field.
 			for filename in os.listdir(data_dir):
 				if filename.endswith('.json'):
 					filepath = os.path.join(data_dir, filename)
@@ -93,7 +97,6 @@ class PolicyDataset(Dataset):
 						for sample in data:
 							ep = sample["episode_index"]
 							episodes.setdefault(ep, []).append(sample)
-			# Process episodes similar to the lerobot branch.
 			print(f'Loaded {len(episodes)} episodes from custom dataset.')
 			for ep, ep_samples in episodes.items():
 				ep_samples = sorted(ep_samples, key=lambda s: s["frame_index"])
@@ -121,7 +124,6 @@ class PolicyDataset(Dataset):
 					self._chunked_samples.append(new_sample)
 		os.makedirs(OUTPUT_DIR + self.data_source, exist_ok=True)
 		self.normalize = Normalize.compute_from_samples(self._chunked_samples)
-		# Save normalization stats using Parquet.
 		self.normalize.save(OUTPUT_DIR + self.data_source + "/" + "normalization_stats.parquet")
 
 	def __len__(self):
@@ -132,11 +134,9 @@ class PolicyDataset(Dataset):
 		obs = sample["observation"]
 		if "state" not in obs:
 			raise KeyError("Sample must contain observation['state']")
-		# Convert state to tensor and flatten it.
 		state_raw = torch.tensor(obs["state"], dtype=torch.float32)
-		state_flat = state_raw.flatten()  # Expected shape: (4,)
+		state_flat = state_raw.flatten()
 		condition = self.normalize.normalize_condition(state_flat)
-		# Load two images.
 		if self.data_source == "lerobot":
 			image_array0 = obs["image"][0]
 			image_array1 = obs["image"][1]
@@ -165,7 +165,6 @@ class PolicyDataset(Dataset):
 				image = [image0, image1]
 			else:
 				raise FileNotFoundError("Image file not found.")
-		# Process actions.
 		if "action" not in sample:
 			raise KeyError("Sample does not contain 'action'")
 		action_data = sample["action"]
@@ -174,7 +173,6 @@ class PolicyDataset(Dataset):
 		else:
 			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
 		action = self.normalize.normalize_action(action)
-		# Build local time sequence.
 		if "time_index" in sample:
 			time_idx = torch.tensor(sample["time_index"], dtype=torch.float32)
 			max_t = float(time_idx[-1]) if time_idx[-1] > 0 else 1.0
@@ -186,6 +184,13 @@ class PolicyDataset(Dataset):
 def train():
 	"""
 	Train the diffusion policy model using PolicyDataset.
+	
+	Loss computation has been updated to:
+	  - Support a configurable prediction type (either "epsilon" to predict noise or "sample" to predict the original trajectory).
+	  - Weight the loss by sqrt(1 - alpha_bar) as a function of the diffusion timestep.
+	  - Apply loss masking for padded action elements.
+	  - Restrict the sampling of diffusion timesteps to a middle range to avoid trivial training.
+	
 	Metrics are logged via TensorBoard and CSV.
 	"""
 	print(f"CUDA is available: {torch.cuda.is_available()}")
@@ -223,7 +228,7 @@ def train():
 			weight_decay=OPTIMIZER_WEIGHT_DECAY
 	)
 
-	# Cosine Annealing Scheduler
+	# Cosine Annealing Scheduler.
 	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
 	mse_loss = nn.MSELoss(reduction="none")
@@ -231,6 +236,9 @@ def train():
 	betas = get_beta_schedule(T)
 	alphas, alphas_cumprod = compute_alphas(betas)
 	alphas_cumprod = alphas_cumprod.to(device)
+
+	# Set prediction type: "epsilon" means predict noise; "sample" means predict original action.
+	prediction_type = "epsilon"  # Change to "sample" if desired.
 
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
@@ -243,12 +251,12 @@ def train():
 			action = action.to(device)
 			time_seq = time_seq.to(device)
 
-			# Pad or slice actions to fixed length.
+			# Ensure action sequence has fixed length (WINDOW_SIZE + 1).
 			target_length = WINDOW_SIZE + 1
-			if action.ndim == 2:
+			if action.ndim == 2: # One action sample.
 				action_seq = action.unsqueeze(1).repeat(1, target_length, 1)
 				mask = torch.ones((action.size(0), target_length), dtype=torch.bool, device=device)
-			elif action.ndim == 3:
+			elif action.ndim == 3: # Action sequence
 				seq_len = action.shape[1]
 				if seq_len < target_length:
 					valid_mask = torch.ones((action.size(0), seq_len), dtype=torch.bool, device=device)
@@ -262,14 +270,32 @@ def train():
 			else:
 				raise ValueError("Unexpected shape for action tensor")
 
-			t_tensor = torch.randint(0, T, (action_seq.size(0),), device=device)
+			# Restrict diffusion timesteps to a middle range.
+			# This is to avoid creating trivial targets for the model.
+			# Trivial targets are either fully clean signals or pure noise.
+			t_min = T // 10          # e.g., if T=1000, t_min=100.
+			t_max = T - t_min        # e.g., t_max=900.
+			t_tensor = torch.randint(t_min, t_max, (action_seq.size(0),), device=device)
+
 			alpha_bar = rearrange(alphas_cumprod[t_tensor], 'b -> b 1 1')
 			noise = torch.randn_like(action_seq)
 			x_t = torch.sqrt(alpha_bar) * action_seq + torch.sqrt(1 - alpha_bar) * noise
 
 			noise_pred = model(x_t, t_tensor.float(), state, image)
+
+			# Weight for the loss.
 			weight = torch.sqrt(1 - alpha_bar)
-			loss_elements = mse_loss(noise_pred, noise)
+
+			# Determine the target based on prediction type.
+			if prediction_type == "epsilon":
+				target = noise
+			elif prediction_type == "sample":
+				target = action_seq
+			else:
+				raise ValueError("Unsupported prediction type: choose 'epsilon' or 'sample'.")
+
+			loss_elements = mse_loss(noise_pred, target)
+
 			if DO_MASK_LOSS_FOR_PADDING:
 				loss_elements = loss_elements * mask.unsqueeze(-1)
 

@@ -28,8 +28,6 @@ def get_sinusoidal_embedding(t, dim):
 	exp_factors = torch.exp(torch.arange(half_dim, device=device) * -emb_scale)
 	emb = torch.einsum("bi,j->bij", t, exp_factors).squeeze(1)
 	emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
-	if dim % 2 == 1:
-		emb = F.pad(emb, (0, 1))
 	return emb
 
 class FiLMBlock(nn.Module):
@@ -134,10 +132,9 @@ class DiffusionPolicy(nn.Module):
 
 		# Time embedding network.
 		self.time_mlp = nn.Sequential(
-			nn.Linear(time_embed_dim, time_embed_dim),
-			nn.GELU(),
-			nn.Linear(time_embed_dim, time_embed_dim),
-			nn.GELU()
+			nn.Linear(time_embed_dim, time_embed_dim * 4), # x4 boosts capacity to enable richer representation.
+			nn.Mish(), # Mish is non-monotonic which helps when learning complex functions.
+			nn.Linear(4 * time_embed_dim, time_embed_dim),
 		)
 
 		# Visual encoder to extract features from images.
