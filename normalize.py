@@ -15,6 +15,9 @@ import torch
 import pyarrow as pa
 import pyarrow.parquet as pq
 import os
+import pandas as pd
+from tabulate import tabulate
+import numpy as np
 
 class Normalize:
 	def __init__(self, condition_mean, condition_std, action_min, action_max):
@@ -149,21 +152,22 @@ class Normalize:
 		Args:
 			filepath (str): File path for saving.
 		"""
-		table = pa.Table.from_pydict(self.to_dict())
+		data_dict = self.to_dict()
+		table = pa.Table.from_pydict(data_dict)
 		pq.write_table(table, filepath)
+		print(f'Normalization stats saved to {filepath}')
+
+		# Read the parquet file into a DataFrame and convert list/array values to strings.
+		df = pd.read_parquet(filepath)
+		for col in df.columns:
+			df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (list, tuple, np.ndarray)) else x)
+		print(tabulate(df, headers='keys', tablefmt='psql'))
 
 	@classmethod
 	def load(cls, filepath, device=None):
 		"""
 		Load normalization statistics from a Parquet file.
-		If the file is not found, return default normalization stats.
-
-		Args:
-			filepath (str): Path to the Parquet file.
-			device: Torch device.
-
-		Returns:
-			Normalize: Loaded normalization instance or a default instance.
+		If the file is not found, return default normalization stats on the specified device.
 		"""
 		if not os.path.exists(filepath):
 			print(f"Warning: Normalization stats file '{filepath}' not found. Using default normalization stats.")
@@ -178,4 +182,9 @@ class Normalize:
 		condition_std = torch.tensor(data["condition_std"][0], dtype=torch.float32, device=device)
 		action_min = torch.tensor(data["action_min"][0], dtype=torch.float32, device=device)
 		action_max = torch.tensor(data["action_max"][0], dtype=torch.float32, device=device)
+		# Read the parquet file into a DataFrame and convert list/array values to strings.
+		df = pd.read_parquet(filepath)
+		for col in df.columns:
+			df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (list, tuple, np.ndarray)) else x)
+		print(tabulate(df, headers='keys', tablefmt='psql'))
 		return cls(condition_mean, condition_std, action_min, action_max)

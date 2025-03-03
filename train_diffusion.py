@@ -22,9 +22,14 @@ from config import *
 from einops import rearrange
 from normalize import Normalize  # Normalization helper class.
 from PIL import Image  # For image loading and processing.
+from policy_inference import DiffusionPolicyInference
 from datasets import load_dataset
 import numpy as np
 import wandb
+from kaggle_secrets import UserSecretsClient
+import gymnasium as gym
+import gym_pusht
+import cv2
 
 def get_chunk_time_encoding(length: int):
 	"""
@@ -175,6 +180,97 @@ class PolicyDataset(Dataset):
 		else:
 			time_seq = get_chunk_time_encoding(action.shape[0])
 		return condition, image, action, time_seq
+
+def validate_policy(model, device):
+	"""
+	Run a validation episode using the current diffusion policy model,
+	record a video, compute the total reward, and log the video and reward to WandB.
+	
+	Args:
+		model (nn.Module): Current diffusion policy model.
+		device (torch.device): Device on which the model is running.
+
+	Returns:
+		total_reward (float): Total reward accumulated during validation.
+	"""
+	# Create the environment using the LeRobot gym environment.
+	env = gym.make(LE_ROBOT_GYM_ENV_NAME, obs_type="pixels_agent_pos", render_mode="rgb_array")
+	obs, info = env.reset()
+	frames = []
+	total_reward = 0.0
+	done = False
+	steps = 0
+	max_steps = 50  # You can adjust the number of validation steps
+
+	prev_agent_pos = None
+	prev_image = None
+
+	# Create an instance of the inference wrapper using current model weights.
+	# We reuse DiffusionPolicyInference but override its model with our current model.
+	inference = DiffusionPolicyInference(model_path="", T=T, device=device, norm_stats_path=OUTPUT_DIR + "lerobot/normalization_stats.parquet")
+	inference.model = model  # Use current model weights
+
+	while not done and steps < max_steps:
+		# Build state from current and previous agent positions.
+		agent_pos_np = np.array(obs["agent_pos"])
+		agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
+		if prev_agent_pos is None:
+			state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
+		else:
+			state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
+		prev_agent_pos = agent_pos_tensor.clone()
+		# Process current image: add batch dimension.
+		image_array = obs["pixels"]
+		if not isinstance(image_array, np.ndarray):
+			image_array = np.array(image_array, dtype=np.uint8)
+		current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
+		# Use previous image if available; otherwise, duplicate.
+		if prev_image is None:
+			image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
+		else:
+			image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
+		prev_image = current_image_tensor.clone()
+		
+		# Use the inference method to sample an action sequence.
+		# The inference returns a sequence of shape (window_size, ACTION_DIM).
+		action_seq = inference.sample_action(state.to(device), image_tuple)
+		# For simplicity, choose the first action in the sequence.
+		action = action_seq[0].cpu().numpy()
+
+		# Step the environment.
+		obs, reward, done, truncated, info = env.step(action)
+		total_reward += reward
+		frame = env.render()
+		if frame is not None:
+			frames.append(frame)
+		steps += 1
+
+	env.close()
+
+	if len(frames) == 0:
+		print("No frames captured during validation.")
+		return total_reward
+	
+	print(f'Validation total reward: {total_reward}, done: {done}, steps: {steps}')
+
+	# Write the captured frames to a video file.
+	height, width, _ = frames[0].shape
+	video_file = "validation_video.mp4"
+	fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+	video_writer = cv2.VideoWriter(video_file, fourcc, 30, (width, height))
+	for frame in frames:
+		# OpenCV expects BGR images.
+		frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+		video_writer.write(frame_bgr)
+	video_writer.release()
+
+	# Log the video and validation reward to WandB.
+	wandb.log({
+		"validation_video": wandb.Video(video_file, fps=30, format="mp4"),
+		"validation_total_reward": total_reward
+	})
+
+	return total_reward
 
 def train():
 	"""
@@ -361,6 +457,10 @@ def train():
 			if param.grad is not None:
 				grad_norm = param.grad.data.norm(2).item()
 				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
+
+		if (epoch + 1) % VALIDATION_INTERVAL == 0:
+			val_reward = validate_policy(model, device)
+			print(f"Validation total reward at epoch {epoch+1}: {val_reward}")
 		
 		# Save a checkpoint every 10 epochs.
 		if (epoch + 1) % 10 == 0:

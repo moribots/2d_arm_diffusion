@@ -55,6 +55,7 @@ LINK_COLLISION_WEIGHT = 5.0
 T = 1000
 BATCH_SIZE = 64
 EPOCHS = 900
+VALIDATION_INTERVAL = 100
 # Settings from: https://github.com/huggingface/lerobot/blob/main/lerobot/common/policies/diffusion/configuration_diffusion.py#L154-L160
 OPTIMIZER_LR = 1e-4
 OPTIMIZER_BETAS = (0.95, 0.999)

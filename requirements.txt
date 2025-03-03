@@ -11,3 +11,6 @@ numpy>=1.21
 tensorboard>=2.8
 wandb>=0.12
 tqdm>=4.62
+cv2
+tabulate
+pandas
