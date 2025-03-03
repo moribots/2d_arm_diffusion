@@ -82,9 +82,13 @@ class DiffusionPolicyInference:
 			x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		predicted_sequence_normalized = x_t[0, 1:, :]
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
+		# Check if any values were clamped
+		before_clamp = predicted_sequence.clone()
 		predicted_sequence = torch.clamp(
 			predicted_sequence,
 			min=torch.tensor([0, 0], device=self.device),
 			max=torch.tensor([SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1], device=self.device)
 		)
+		if not torch.equal(before_clamp, predicted_sequence):
+			print("Warning: Some predicted actions were clamped to be within screen bounds")
 		return predicted_sequence
