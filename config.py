@@ -146,6 +146,10 @@ def print_settings():
 			'Seconds per Sample': SEC_PER_SAMPLE,
 			'Demo Frames': DEMO_DATA_FRAMES,
 			'Image Resolution': IMG_RES
+		},
+		'Training Options:': {
+			'Mask Loss for Padding': DO_MASK_LOSS_FOR_PADDING,
+			'Sqrt Alpha Bar Weighting': DO_SQRT_ALPHA_BAR_WEIGHTING
 		}
 	}
 
