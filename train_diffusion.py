@@ -1,13 +1,7 @@
 """
 Training module for the diffusion policy.
-This module loads training samples (with two images per sample for conditioning)
-and trains the DiffusionPolicy network.
-Training metrics are logged via TensorBoard and CSV, and normalization statistics
-are saved in Parquet format.
 
-Updates for loss computation:
-  - Supports configurable prediction type ("epsilon" vs. "sample"). When using "epsilon",
-	the network is trained to predict the noise added to the action sequence.
+Notes:
   - Applies a per-sample weighting factor (sqrt(1 - alpha_bar)) to the loss.
   - Optionally masks the loss for padded regions in the action sequence.
   - Restricts diffusion timesteps to a middle range (t_min to t_max) to prevent trivial targets.
@@ -30,6 +24,7 @@ from normalize import Normalize  # Normalization helper class.
 from PIL import Image  # For image loading and processing.
 from datasets import load_dataset
 import numpy as np
+import wandb
 
 def get_chunk_time_encoding(length: int):
 	"""
@@ -183,65 +178,99 @@ class PolicyDataset(Dataset):
 
 def train():
 	"""
-	Train the diffusion policy model using PolicyDataset.
-	
-	Loss computation has been updated to:
-	  - Support a configurable prediction type (either "epsilon" to predict noise or "sample" to predict the original trajectory).
-	  - Weight the loss by sqrt(1 - alpha_bar) as a function of the diffusion timestep.
-	  - Apply loss masking for padded action elements.
-	  - Restrict the sampling of diffusion timesteps to a middle range to avoid trivial training.
-	
-	Metrics are logged via TensorBoard and CSV.
+	Train the policy and log stats.
+
+	The training loop:
+	  - Loads data and prepares fixed-length action sequences with padding and masking.
+	  - Samples diffusion timesteps.
+	  - Computes the noise prediction loss with optional per-sample weighting factor based on the noise level.
+	  - Logs training metrics (loss, learning rate, gradients) to WandB, TensorBoard, and a CSV file.
+	  - Saves model checkpoints periodically.
 	"""
-	print(f"CUDA is available: {torch.cuda.is_available()}")
+	# Initialize a new WandB run with project settings and hyperparameters.
+	wandb.init(project="diffusion_policy", config={
+		"epochs": EPOCHS,
+		"batch_size": BATCH_SIZE,
+		"learning_rate": OPTIMIZER_LR,
+		"optimizer_betas": OPTIMIZER_BETAS,
+		"optimizer_eps": OPTIMIZER_EPS,
+		"optimizer_weight_decay": OPTIMIZER_WEIGHT_DECAY,
+		"T": T,
+		"window_size": WINDOW_SIZE + 1,
+		"dataset": DATASET_TYPE
+	})
+
+	# Initialize TensorBoard writer and CSV logger.
 	writer = SummaryWriter(log_dir="runs/diffusion_policy_training")
 	csv_file = open("training_metrics.csv", "w", newline="")
 	csv_writer = csv.writer(csv_file)
 	csv_writer.writerow(["epoch", "avg_loss"])
+
+	# Enable benchmark mode for optimized performance on fixed-size inputs.
 	torch.backends.cudnn.benchmark = True
 
+	# Load data.
 	dataset = PolicyDataset(TRAINING_DATA_DIR)
 	dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
 
 	print("len dataloader", len(dataloader))
 	print("len dataset", len(dataset))
 
-	model = DiffusionPolicy(action_dim=ACTION_DIM, condition_dim=CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE+1)
+	# Initialize the diffusion policy model.
+	model = DiffusionPolicy(
+		action_dim=ACTION_DIM,
+		condition_dim=CONDITION_DIM,
+		time_embed_dim=128,
+		window_size=WINDOW_SIZE + 1
+	)
 	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 	model.to(device)
 
+	# Enable WandB to automatically log model gradients and parameters.
+	wandb.watch(model, log="all")
+
+	# Load pre-trained weights if a checkpoint exists.
 	checkpoint_path = os.path.join(OUTPUT_DIR + dataset.data_source + "/", "diffusion_policy.pth")
 	if os.path.exists(checkpoint_path):
 		print(f"Loading pre-trained policy from {checkpoint_path}")
 		state_dict = torch.load(checkpoint_path, map_location=device)
 		model.load_state_dict(state_dict)
 
+	# Use multiple GPUs if available.
 	if torch.cuda.device_count() > 1:
 		print(f"Using {torch.cuda.device_count()} GPUs for training.")
 		model = nn.DataParallel(model)
 
+	# Set up the AdamW optimizer.
 	optimizer = optim.AdamW(
-			model.parameters(),
-			lr=OPTIMIZER_LR,
-			betas=OPTIMIZER_BETAS,
-			eps=OPTIMIZER_EPS,
-			weight_decay=OPTIMIZER_WEIGHT_DECAY
+		model.parameters(),
+		lr=OPTIMIZER_LR,
+		betas=OPTIMIZER_BETAS,
+		eps=OPTIMIZER_EPS,
+		weight_decay=OPTIMIZER_WEIGHT_DECAY
 	)
 
-	# Cosine Annealing Scheduler.
+	# Set up a cosine annealing learning rate scheduler.
 	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
+	# Define the MSE loss (without reduction) to optionally apply custom weighting.
 	mse_loss = nn.MSELoss(reduction="none")
 
+	# Generate the beta schedule and compute the cumulative product of alphas.
 	betas = get_beta_schedule(T)
 	alphas, alphas_cumprod = compute_alphas(betas)
 	alphas_cumprod = alphas_cumprod.to(device)
 
+	# Training loop over epochs.
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
+
+		# Loop over batches.
 		for batch in dataloader:
+			# Missing key check.
 			if len(batch) != 4:
-				continue
+				print("Malformed batch, skipping.")
+				continue  # Skip any malformed batch.
 			state, image, action, time_seq = batch
 			state = state.to(device)
 			image = [img.to(device) for img in image]
@@ -250,15 +279,16 @@ def train():
 
 			# Ensure action sequence has fixed length (WINDOW_SIZE + 1).
 			target_length = WINDOW_SIZE + 1
-			if action.ndim == 2: # One action sample.
+			if action.ndim == 2:  # Single action sample.
 				action_seq = action.unsqueeze(1).repeat(1, target_length, 1)
 				mask = torch.ones((action.size(0), target_length), dtype=torch.bool, device=device)
-			elif action.ndim == 3: # Action sequence
+			elif action.ndim == 3:  # Action sequence provided.
 				seq_len = action.shape[1]
 				if seq_len < target_length:
 					valid_mask = torch.ones((action.size(0), seq_len), dtype=torch.bool, device=device)
 					pad_mask = torch.zeros((action.size(0), target_length - seq_len), dtype=torch.bool, device=device)
 					mask = torch.cat([valid_mask, pad_mask], dim=1)
+					# Pad the sequence with the last valid action.
 					pad = action[:, -1:, :].repeat(1, target_length - seq_len, 1)
 					action_seq = torch.cat([action, pad], dim=1)
 				else:
@@ -267,57 +297,77 @@ def train():
 			else:
 				raise ValueError("Unexpected shape for action tensor")
 
-			# Restrict diffusion timesteps to a middle range.
-			# This is to avoid creating trivial targets for the model.
-			# Trivial targets are either fully clean signals or pure noise.
-			t_min = T // 10          # e.g., if T=1000, t_min=100.
-			t_max = T - t_min        # e.g., t_max=900.
+			# Sample diffusion timesteps in the middle range to avoid trivial training targets.
+			t_min = T // 10        # e.g., if T=1000, then t_min=100.
+			t_max = T - t_min      # e.g., then t_max=900.
 			t_tensor = torch.randint(t_min, t_max, (action_seq.size(0),), device=device)
 
+			# Compute the noise scaling factor from the cumulative product of alphas.
 			alpha_bar = rearrange(alphas_cumprod[t_tensor], 'b -> b 1 1')
 			noise = torch.randn_like(action_seq)
+			# Compute the noisy action sequence using the forward diffusion process:
+			# x_t = sqrt(alpha_bar)*action_seq + sqrt(1 - alpha_bar)*noise.
 			x_t = torch.sqrt(alpha_bar) * action_seq + torch.sqrt(1 - alpha_bar) * noise
 
+			# Predict noise using the diffusion policy model.
 			noise_pred = model(x_t, t_tensor.float(), state, image)
 
-			# Weight for the loss.
+			# Compute the weight factor based on the noise level.
 			weight = torch.sqrt(1 - alpha_bar)
 
+			# Calculate the element-wise MSE loss.
 			loss_elements = mse_loss(noise_pred, noise)
 
+			# Apply loss masking for padded elements if enabled.
 			if DO_MASK_LOSS_FOR_PADDING:
 				loss_elements = loss_elements * mask.unsqueeze(-1)
 
+			# Optionally weight the loss by sqrt(1 - alpha_bar).
 			if DO_SQRT_ALPHA_BAR_WEIGHTING:
 				loss = torch.mean(weight * loss_elements)
 			else:
 				loss = torch.mean(loss_elements)
+			
 			optimizer.zero_grad()
 			loss.backward()
 			optimizer.step()
 
 			running_loss += loss.item() * action_seq.size(0)
 
+		# Compute average loss for the epoch.
 		avg_loss = running_loss / len(dataset)
+		current_lr = optimizer.param_groups[0]['lr']
+
+		# Log progress to TensorBoard and CSV.
 		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}")
 		writer.add_scalar("Loss/avg_loss", avg_loss, epoch+1)
-		current_lr = optimizer.param_groups[0]['lr']
 		writer.add_scalar("LearningRate", current_lr, epoch+1)
+		csv_writer.writerow([epoch+1, avg_loss])
+		
+		# Log metrics to WandB.
+		wandb.log({"epoch": epoch+1, "avg_loss": avg_loss, "learning_rate": current_lr})
+
+		# Log parameter histograms and gradient norms.
 		for name, param in model.named_parameters():
 			writer.add_histogram(name, param, epoch+1)
 			if param.grad is not None:
 				grad_norm = param.grad.data.norm(2).item()
 				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
-		csv_writer.writerow([epoch+1, avg_loss])
+		
+		# Save a checkpoint every 10 epochs.
 		if (epoch + 1) % 10 == 0:
 			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy_final.pth")
 			print(f"Checkpoint overwritten at epoch {epoch+1}")
+		
+		# Update the learning rate scheduler.
 		scheduler.step()
 
+	# Save the final model after training completes.
 	torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 	print(f"Training complete. Model saved as {OUTPUT_DIR}diffusion_policy.pth.")
 	writer.close()
 	csv_file.close()
+	wandb.finish()
 
 if __name__ == "__main__":
 	train()

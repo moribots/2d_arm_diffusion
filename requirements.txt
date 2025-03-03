@@ -9,3 +9,5 @@ datasets>=2.0
 Pillow>=9.0
 numpy>=1.21
 tensorboard>=2.8
+wandb>=0.12
+tqdm>=4.62
