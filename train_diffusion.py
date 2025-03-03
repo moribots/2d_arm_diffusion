@@ -187,8 +187,16 @@ def train():
 	  - Logs training metrics (loss, learning rate, gradients) to WandB, TensorBoard, and a CSV file.
 	  - Saves model checkpoints periodically.
 	"""
+	# Retrieve the WandB API key from the environment variable
+	api_key = os.environ.get("WANDB_API_KEY")
+
+	if api_key is None:
+		print("WANDB_API_KEY is not set. Please add it as a Kaggle secret.")
+	else:
+		# Log in to WandB using the private API key
+		wandb.login(key=api_key)
 	# Initialize a new WandB run with project settings and hyperparameters.
-	wandb.init(project="diffusion_policy", config={
+	wandb.init(entity="moribots-personal", project="2d_arm_diffusion", config={
 		"epochs": EPOCHS,
 		"batch_size": BATCH_SIZE,
 		"learning_rate": OPTIMIZER_LR,
