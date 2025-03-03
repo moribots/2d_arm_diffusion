@@ -95,7 +95,7 @@ OUTPUT_DIR = ""
 DO_MASK_LOSS_FOR_PADDING = True
 
 # Do √(1 – ᾱ) weighting for loss.
-DO_SQRT_ALPHA_BAR_WEIGHTING = True
+DO_SQRT_ALPHA_BAR_WEIGHTING = False
 
 # Dataset and environment type settings.
 DATASET_TYPE = "lerobot"      # Options: "custom", "lerobot"
