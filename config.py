@@ -94,6 +94,9 @@ OUTPUT_DIR = ""
 # Diffusion loss masking configuration.
 DO_MASK_LOSS_FOR_PADDING = True
 
+# Do √(1 – ᾱ) weighting for loss.
+DO_SQRT_ALPHA_BAR_WEIGHTING = True
+
 # Dataset and environment type settings.
 DATASET_TYPE = "lerobot"      # Options: "custom", "lerobot"
 LE_ROBOT_GYM_ENV_NAME = "gym_pusht/PushT-v0"

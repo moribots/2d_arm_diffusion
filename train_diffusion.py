@@ -237,9 +237,6 @@ def train():
 	alphas, alphas_cumprod = compute_alphas(betas)
 	alphas_cumprod = alphas_cumprod.to(device)
 
-	# Set prediction type: "epsilon" means predict noise; "sample" means predict original action.
-	prediction_type = "epsilon"  # Change to "sample" if desired.
-
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
 		for batch in dataloader:
@@ -286,20 +283,15 @@ def train():
 			# Weight for the loss.
 			weight = torch.sqrt(1 - alpha_bar)
 
-			# Determine the target based on prediction type.
-			if prediction_type == "epsilon":
-				target = noise
-			elif prediction_type == "sample":
-				target = action_seq
-			else:
-				raise ValueError("Unsupported prediction type: choose 'epsilon' or 'sample'.")
-
-			loss_elements = mse_loss(noise_pred, target)
+			loss_elements = mse_loss(noise_pred, noise)
 
 			if DO_MASK_LOSS_FOR_PADDING:
 				loss_elements = loss_elements * mask.unsqueeze(-1)
 
-			loss = torch.mean(weight * loss_elements)
+			if DO_SQRT_ALPHA_BAR_WEIGHTING:
+				loss = torch.mean(weight * loss_elements)
+			else:
+				loss = torch.mean(loss_elements)
 			optimizer.zero_grad()
 			loss.backward()
 			optimizer.step()
