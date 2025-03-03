@@ -310,7 +310,7 @@ def train():
 				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
 		csv_writer.writerow([epoch+1, avg_loss])
 		if (epoch + 1) % 10 == 0:
-			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
+			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy_final.pth")
 			print(f"Checkpoint overwritten at epoch {epoch+1}")
 		scheduler.step()
 
