@@ -5,6 +5,46 @@ Contains:
   - A time embedding module.
   - A multi-residual block U-Net architecture.
   - Scale and bias modulation via FiLM,	with group normalization and Mish activation.
+
+Overall Architecture:
+  
+		   +------------------+
+		   |  Input: t, state |
+		   +------------------+
+					|
+					v
+		 +----------------------+
+		 | Sinusoidal Embedding | <--- DiffusionTimeEmbedding
+		 +----------------------+
+					|
+					v
+		  +-------------------+
+		  |       MLP         |
+		  | (Linear, Mish,    |
+		  |   Linear)         |
+		  +-------------------+
+					|
+					v
+			 Time Embedding (t_emb)
+					|
+					v
+		   +--------------------+
+		   | Visual Encoder     | <-- processes image -> image_features
+		   +--------------------+
+					|
+					v
+		  +----------------------+
+		  | Concatenate state,   |
+		  | image_features, t_emb|  --> global_cond
+		  +----------------------+
+					|
+					v
+		  +----------------------+
+		  |        U-Net         | <-- UNet1D predicts noise
+		  +----------------------+
+					|
+					v
+			Predicted noise output
 """
 
 import math
@@ -95,11 +135,33 @@ class FiLM(nn.Module):
 class ResidualBlock1D(nn.Module):
 	"""
 	Residual block for 1D diffusion.
-	
-	This block uses two convolutional layers, each followed by GroupNorm and Mish activation.
-	The conditioning is applied between the two convolutions using a FiLM module
-	(which outputs both scale and bias). A residual connection is added, with a 1x1 convolution
-	if input and output dimensions differ.
+
+	This block comprises two convolutional layers, each followed by GroupNorm and
+	Mish activation. In between the convolutions, FiLM conditioning is applied.
+	A residual connection (with a possible 1x1 convolution) is added to aid training.
+
+	Diagram:
+		 x (input)
+		   |
+		 Conv1D + GN + Mish
+		   |
+		 FiLM Conditioning
+		   |
+		 Conv1D + GN + Mish
+		   |     
+	  +----Residual (x or x projected)----+
+		   |
+		 Output
+
+	Attributes:
+		conv1 (nn.Conv1d): First convolutional layer.
+		gn1 (nn.GroupNorm): Group normalization after conv1.
+		act1 (nn.Mish): Mish activation after first conv.
+		film (FiLM): FiLM module for conditioning.
+		conv2 (nn.Conv1d): Second convolutional layer.
+		gn2 (nn.GroupNorm): Group normalization after conv2.
+		act2 (nn.Mish): Mish activation after second conv.
+		res_conv (nn.Conv1d or nn.Identity): Residual connection (projection if needed).
 	"""
 	def __init__(self, in_channels: int, out_channels: int, cond_dim: int, kernel_size: int = 3, n_groups: int = 8):
 		super().__init__()
@@ -139,15 +201,73 @@ class ResidualBlock1D(nn.Module):
 class UNet1D(nn.Module):
 	"""
 	A 1D U-Net for denoising a temporal action sequence using multiple residual blocks per stage.
-	
-	This network uses a simple encoder-decoder structure:
-	  - Initial convolution.
-	  - Two downsampling stages, each with two residual blocks.
-	  - A bottleneck with two residual blocks.
-	  - Two upsampling stages, each with two residual blocks and skip connections.
-	  - Final projection back to the action dimension.
-	
-	Conditioning is applied via concatenated global features.
+
+	The network architecture is an encoder-decoder with skip connections:
+	  - Initial convolution converts input sequence from (B, T, action_dim) to (B, action_dim, T).
+	  - Encoder:
+		  Stage 1: Two residual blocks -> skip connection -> downsampling.
+		  Stage 2: Two residual blocks -> skip connection -> downsampling.
+	  - Bottleneck: Two residual blocks.
+	  - Decoder:
+		  Stage 2: Upsampling -> concatenate skip connection from encoder stage 2 -> Two residual blocks.
+		  Stage 1: Upsampling -> concatenate skip connection from encoder stage 1 -> Two residual blocks.
+	  - Final convolution projects features back to the action dimension.
+
+	Diagram:
+	   Input (B, T, action_dim)
+				  |
+		 [Rearrange: (B, action_dim, T)]
+				  |
+			Initial Conv
+				  |
+	   +----------------------+
+	   |   Encoder Stage 1    |  
+	   |  [ResBlock x2]       |
+	   |      Skip1           |
+	   +----------------------+
+				  |
+			 Downsample1
+				  |
+	   +----------------------+
+	   |   Encoder Stage 2    |
+	   |  [ResBlock x2]       |
+	   |      Skip2           |
+	   +----------------------+
+				  |
+			 Downsample2
+				  |
+		 [Bottleneck: ResBlock x2]
+				  |
+			 Upsample2
+				  |
+		   Concatenate Skip2
+				  |
+		  [ResBlock x2 Decoder]
+				  |
+			 Upsample1
+				  |
+		   Concatenate Skip1
+				  |
+		  [ResBlock x2 Decoder]
+				  |
+			Final Convolution
+				  |
+		 Rearrange: (B, T, action_dim)
+				  |
+			   Output
+				  
+	Attributes:
+		initial_conv (nn.Conv1d): Initial convolution layer.
+		down_block1_1, down_block1_2 (ResidualBlock1D): Residual blocks for encoder stage 1.
+		downsample1 (nn.Conv1d): Downsampling after stage 1.
+		down_block2_1, down_block2_2 (ResidualBlock1D): Residual blocks for encoder stage 2.
+		downsample2 (nn.Conv1d): Downsampling after stage 2.
+		bottleneck_block1, bottleneck_block2 (ResidualBlock1D): Bottleneck residual blocks.
+		up_block2_1, up_block2_2 (ResidualBlock1D): Residual blocks for decoder stage 2.
+		upsample2 (nn.ConvTranspose1d): Upsampling for decoder stage 2.
+		up_block1_1, up_block1_2 (ResidualBlock1D): Residual blocks for decoder stage 1.
+		upsample1 (nn.ConvTranspose1d): Upsampling for decoder stage 1.
+		final_conv (nn.Conv1d): Final convolution to project back to action dimension.
 	"""
 	def __init__(self, action_dim: int, cond_dim: int, hidden_dim: int = 64):
 		super().__init__()
