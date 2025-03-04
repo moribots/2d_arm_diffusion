@@ -75,30 +75,8 @@ class Normalize:
 		Returns:
 			Tensor: Normalized condition.
 		"""
-		if condition.dim() == 1:
-			cond_dim = condition.shape[0]
-		else:
-			cond_dim = condition.shape[-1]
-		
-		# Adjust min and max for dimension mismatch
-		if self.condition_min.numel() != cond_dim:
-			# Handle the case if dimension doesn't match
-			if cond_dim == 4:
-				condition_min = torch.tensor([0.0, 0.0, 0.0, 0.0], 
-										   device=condition.device)
-				condition_max = torch.tensor([ACTION_LIM, ACTION_LIM, ACTION_LIM, ACTION_LIM], 
-										   device=condition.device)
-			else:
-				raise ValueError(f"Unexpected condition dimension: {cond_dim}")
-		else:
-			condition_min = self.condition_min
-			condition_max = self.condition_max
-		
-		if condition.dim() > 1 and condition_min.dim() == 1:
-			condition_min = condition_min.unsqueeze(0)
-			condition_max = condition_max.unsqueeze(0)
-			
-		return (condition - condition_min) / (condition_max - condition_min + eps)
+		# Normalize from [condition_min, condition_max] to [-1, 1]
+		return 2.0 * ((condition - self.condition_min) / (self.condition_max - self.condition_min + eps)) - 1.0
 	
 	def normalize_action(self, action: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 		"""
@@ -111,9 +89,10 @@ class Normalize:
 		Returns:
 			Tensor: Normalized action.
 		"""
-		return (action - self.action_min) / (self.action_max - self.action_min + eps)
+		# Normalize from [action_min, action_max] to [-1, 1]
+		return 2.0 * ((action - self.action_min) / (self.action_max - self.action_min + eps)) - 1.0
 	
-	def unnormalize_action(self, action: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+	def unnormalize_action(self, action: torch.Tensor) -> torch.Tensor:
 		"""
 		Revert normalization on an action tensor.
 
@@ -124,7 +103,8 @@ class Normalize:
 		Returns:
 			Tensor: Original action tensor.
 		"""
-		return action * (self.action_max - self.action_min + eps) + self.action_min
+		# Un-normalize from [-1, 1] to [action_min, action_max]
+		return ((action + 1.0) / 2.0) * (self.action_max - self.action_min) + self.action_min
 	
 	def to_dict(self) -> dict:
 		"""

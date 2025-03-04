@@ -90,5 +90,6 @@ class DiffusionPolicyInference:
 			max=torch.tensor([SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1], device=self.device)
 		)
 		if not torch.equal(before_clamp, predicted_sequence):
-			print("Warning: Some predicted actions were clamped to be within screen bounds")
+			print(f'Warning: Some predicted actions were clamped to be within screen bounds {before_clamp[0]}')
+			print(f'Normalized predicted sequence: {predicted_sequence_normalized}')
 		return predicted_sequence
