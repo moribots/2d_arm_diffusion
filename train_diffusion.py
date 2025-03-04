@@ -26,7 +26,10 @@ from policy_inference import DiffusionPolicyInference
 from datasets import load_dataset
 import numpy as np
 import wandb
-from kaggle_secrets import UserSecretsClient
+try:
+	from kaggle_secrets import UserSecretsClient
+except ImportError:
+	pass  # Not running on Kaggle
 import gymnasium as gym
 import gym_pusht
 import cv2
@@ -285,10 +288,14 @@ def train():
 	"""
 	# Retrieve the WandB API key from the environment variable
 	secret_label = "WANDB_API_KEY"
-	api_key = UserSecretsClient().get_secret(secret_label)
-
+	try:
+		api_key = UserSecretsClient().get_secret(secret_label)
+	except KeyError:
+		api_key = None
+	
 	if api_key is None:
 		print("WANDB_API_KEY is not set. Please add it as a Kaggle secret.")
+		KeyError("WANDB_API_KEY is not set. Please add it as a Kaggle secret or manually.")
 	else:
 		# Log in to WandB using the private API key
 		wandb.login(key=api_key)
