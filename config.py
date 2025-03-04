@@ -70,8 +70,8 @@ WINDOW_SIZE = 14
 # Visual encoder output: each image now yields 64 features.
 IMAGE_FEATURE_DIM = 64
 
-# Conditioning dimension: agent state (4) + features from two images (2*64 = 128) = 132.
-CONDITION_DIM = 4 + 2 * IMAGE_FEATURE_DIM
+# Conditioning dimension: agent state - TODO(mrahme): eventually upgrade with goal info, +3
+CONDITION_DIM = 2
 ACTION_DIM = 2
 
 # Temporal parameters.
