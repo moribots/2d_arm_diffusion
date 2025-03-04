@@ -256,23 +256,51 @@ def validate_policy(model, device):
 	
 	print(f'Validation total reward: {total_reward}, done: {done}, steps: {steps}')
 
-	# Write the captured frames to a video file.
+	# Write the captured frames to a video file with absolute path and better codec
 	height, width, _ = frames[0].shape
-	video_file = "validation_video.mp4"
-	fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-	video_writer = cv2.VideoWriter(video_file, fourcc, 30, (width, height))
-	for frame in frames:
-		# OpenCV expects BGR images.
-		frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-		video_writer.write(frame_bgr)
-	video_writer.release()
-
-	# Log the video and validation reward to WandB.
-	wandb.log({
-		"validation_video": wandb.Video(video_file, fps=30, format="mp4"),
-		"validation_total_reward": total_reward
-	})
-
+	video_dir = os.path.join(OUTPUT_DIR, "videos")
+	os.makedirs(video_dir, exist_ok=True)
+	video_path = os.path.join(video_dir, f"validation_video_ep{wandb.run.step}.mp4")
+	
+	# Try multiple codec options to ensure compatibility
+	try:
+		# First try H.264 codec which is widely supported
+		fourcc = cv2.VideoWriter_fourcc(*'H264')
+		video_writer = cv2.VideoWriter(video_path, fourcc, 30, (width, height))
+		
+		# If H264 fails, fallback to more basic options
+		if not video_writer.isOpened():
+			fourcc = cv2.VideoWriter_fourcc(*'avc1')  # Another name for H.264
+			video_writer = cv2.VideoWriter(video_path, fourcc, 30, (width, height))
+		
+		if not video_writer.isOpened():
+			fourcc = cv2.VideoWriter_fourcc(*'XVID')  # More compatible codec
+			video_path = os.path.join(video_dir, f"validation_video_ep{wandb.run.step}.avi")
+			video_writer = cv2.VideoWriter(video_path, fourcc, 30, (width, height))
+			
+		for frame in frames:
+			# OpenCV expects BGR images.
+			frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+			video_writer.write(frame_bgr)
+		video_writer.release()
+		
+		# Verify the file exists and has content
+		if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+			print(f"Video successfully saved to {video_path}")
+			# Log the video and validation reward to WandB
+			wandb.log({
+				"validation_video": wandb.Video(video_path, fps=30, format="mp4"),
+				"validation_total_reward": total_reward
+			})
+		else:
+			print(f"Failed to save video or file is empty: {video_path}")
+			# Log frames as images instead as a fallback
+			wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
+	except Exception as e:
+		print(f"Error saving validation video: {e}")
+		# Alternative: Save individual frames as images and log them
+		wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
+	
 	return total_reward
 
 def train():
