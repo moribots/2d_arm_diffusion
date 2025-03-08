@@ -39,15 +39,13 @@ class DiffusionPolicyInference:
 				new_state_dict[key.replace("module.", "")] = value
 			self.model.load_state_dict(new_state_dict)
 			print(f"Loaded checkpoint from {model_path}")
-		else:
-			print(f"No checkpoint found at {model_path}, starting from scratch.")
 		self.model.eval()
 		self.betas = get_beta_schedule(self.T).to(self.device)
 		self.alphas, self.alphas_cumprod = compute_alphas(self.betas)
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.no_grad()
-	def sample_action(self, state, image, num_ddim_steps=50):
+	def sample_action(self, state, image, num_ddim_steps=100):
 		"""
 		Generate a predicted action sequence using DDIM sampling.
 

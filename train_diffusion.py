@@ -33,6 +33,8 @@ except ImportError:
 import gymnasium as gym
 import gym_pusht
 import cv2
+import time  # Should already be imported
+from tqdm import tqdm  # Add this import at the top
 
 def get_chunk_time_encoding(length: int):
 	"""
@@ -184,7 +186,7 @@ class PolicyDataset(Dataset):
 			time_seq = get_chunk_time_encoding(action.shape[0])
 		return condition, image, action, time_seq
 
-def validate_policy(model, device):
+def validate_policy(model, device, save_locally=False, local_save_path=None):
 	"""
 	Run a validation episode using the current diffusion policy model,
 	record a video, compute the total reward, and log the video and reward to WandB.
@@ -192,9 +194,13 @@ def validate_policy(model, device):
 	Args:
 		model (nn.Module): Current diffusion policy model.
 		device (torch.device): Device on which the model is running.
+		save_locally (bool): If True, save the video locally regardless of WandB upload.
+		local_save_path (str): Optional explicit path to save the video locally. If None and save_locally=True,
+							   a default path will be used.
 
 	Returns:
-		total_reward (float): Total reward accumulated during validation.
+		tuple: (total_reward (float), video_path (str or None)) - Total reward accumulated during validation 
+			   and path to saved video (if successful and save_locally=True, else None).
 	"""
 	# Create the environment using the LeRobot gym environment.
 	env = gym.make(LE_ROBOT_GYM_ENV_NAME, obs_type="pixels_agent_pos", render_mode="rgb_array")
@@ -203,7 +209,7 @@ def validate_policy(model, device):
 	total_reward = 0.0
 	done = False
 	steps = 0
-	max_steps = 50  # You can adjust the number of validation steps
+	max_steps = 300  # You can adjust the number of validation steps
 
 	prev_agent_pos = None
 	prev_image = None
@@ -213,46 +219,56 @@ def validate_policy(model, device):
 	inference = DiffusionPolicyInference(model_path="", T=T, device=device, norm_stats_path=OUTPUT_DIR + "lerobot/normalization_stats.parquet")
 	inference.model = model  # Use current model weights
 
-	while not done and steps < max_steps:
-		# Build state from current and previous agent positions.
-		agent_pos_np = np.array(obs["agent_pos"])
-		agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
-		if prev_agent_pos is None:
-			state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
-		else:
-			state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
-		prev_agent_pos = agent_pos_tensor.clone()
-		# Process current image: add batch dimension.
-		image_array = obs["pixels"]
-		if not isinstance(image_array, np.ndarray):
-			image_array = np.array(image_array, dtype=np.uint8)
-		current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
-		# Use previous image if available; otherwise, duplicate.
-		if prev_image is None:
-			image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
-		else:
-			image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
-		prev_image = current_image_tensor.clone()
-		
-		# Use the inference method to sample an action sequence.
-		# The inference returns a sequence of shape (window_size, ACTION_DIM).
-		action_seq = inference.sample_action(state.to(device), image_tuple)
-		# For simplicity, choose the first action in the sequence.
-		action = action_seq[0].cpu().numpy()
+	# Add tqdm progress bar
+	pbar = tqdm(total=max_steps, desc="Validation", leave=True)
+	try:
+		while not done and steps < max_steps:
+			# Build state from current and previous agent positions.
+			agent_pos_np = np.array(obs["agent_pos"])
+			agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
+			if prev_agent_pos is None:
+				state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
+			else:
+				state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
+			prev_agent_pos = agent_pos_tensor.clone()
+			# Process current image: add batch dimension.
+			image_array = obs["pixels"]
+			if not isinstance(image_array, np.ndarray):
+				image_array = np.array(image_array, dtype=np.uint8)
+			current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
+			# Use previous image if available; otherwise, duplicate.
+			if prev_image is None:
+				image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
+			else:
+				image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
+			prev_image = current_image_tensor.clone()
+			
+			# Use the inference method to sample an action sequence.
+			# The inference returns a sequence of shape (window_size, ACTION_DIM).
+			action_seq = inference.sample_action(state.to(device), image_tuple)
+			# For simplicity, choose the first action in the sequence.
+			action = action_seq[0].cpu().numpy()
 
-		# Step the environment.
-		obs, reward, done, truncated, info = env.step(action)
-		total_reward += reward
-		frame = env.render()
-		if frame is not None:
-			frames.append(frame)
-		steps += 1
+			# Step the environment.
+			obs, reward, done, truncated, info = env.step(action)
+			total_reward += reward
+			frame = env.render()
+			if frame is not None:
+				frames.append(frame)
+			steps += 1
+			
+			# Update progress bar with current reward
+			pbar.set_postfix(reward=f"{total_reward:.2f}")
+			pbar.update(1)
+	finally:
+		# Make sure to close the progress bar even if there's an error
+		pbar.close()
 
 	env.close()
 
 	if len(frames) == 0:
 		print("No frames captured during validation.")
-		return total_reward
+		return total_reward, None
 	
 	print(f'Validation total reward: {total_reward}, done: {done}, steps: {steps}')
 
@@ -260,48 +276,119 @@ def validate_policy(model, device):
 	height, width, _ = frames[0].shape
 	video_dir = os.path.join(OUTPUT_DIR, "videos")
 	os.makedirs(video_dir, exist_ok=True)
-	video_path = os.path.join(video_dir, f"validation_video_ep{wandb.run.step}.mp4")
+	
+	# Generate a timestamp for unique identification
+	timestamp = int(time.time())
+	
+	# Check if wandb is initialized and has an active run
+	has_wandb_run = 'wandb' in globals() and wandb.run is not None
+	
+	# Use a consistent video identifier that works with or without wandb
+	video_identifier = f"{wandb.run.step}" if has_wandb_run else f"{timestamp}"
+	video_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}.mp4")
+	
+	# Debug: Check if the directory is writeable
+	print(f"Attempting to save video to: {video_path}")
+	if not os.access(os.path.dirname(video_path), os.W_OK):
+		print(f"Warning: Directory {os.path.dirname(video_path)} is not writeable!")
 	
 	# Try multiple codec options to ensure compatibility
 	try:
-		# First try H.264 codec which is widely supported
-		fourcc = cv2.VideoWriter_fourcc(*'H264')
-		video_writer = cv2.VideoWriter(video_path, fourcc, 30, (width, height))
+		# List of codecs to try (format, extension)
+		codecs_to_try = [
+			('MJPG', '.avi'),
+			('mp4v', '.mp4'),
+			('H264', '.mp4'),
+			('avc1', '.mp4'),
+			('XVID', '.avi'),
+			('DIVX', '.avi'),
+			('X264', '.mp4')
+		]
 		
-		# If H264 fails, fallback to more basic options
-		if not video_writer.isOpened():
-			fourcc = cv2.VideoWriter_fourcc(*'avc1')  # Another name for H.264
-			video_writer = cv2.VideoWriter(video_path, fourcc, 30, (width, height))
+		video_writer = None
+		saved_video_path = None
 		
-		if not video_writer.isOpened():
-			fourcc = cv2.VideoWriter_fourcc(*'XVID')  # More compatible codec
-			video_path = os.path.join(video_dir, f"validation_video_ep{wandb.run.step}.avi")
-			video_writer = cv2.VideoWriter(video_path, fourcc, 30, (width, height))
+		# For explicit local saving, use the provided path or generate a default one
+		if save_locally and local_save_path is None:
+			videos_dir = os.path.join(OUTPUT_DIR, "local_videos")
+			os.makedirs(videos_dir, exist_ok=True)
+			local_save_path = os.path.join(videos_dir, f"validation_video_local_{int(time.time())}.avi")
 			
+		for codec, ext in codecs_to_try:
+			try:
+				print(f"Trying codec: {codec} with extension {ext}")
+				
+				# Determine which path to use
+				if save_locally and local_save_path is not None:
+					# If extension doesn't match the one in local_save_path, append it
+					if not local_save_path.endswith(ext):
+						base_path = os.path.splitext(local_save_path)[0]
+						current_path = f"{base_path}{ext}"
+					else:
+						current_path = local_save_path
+				else:
+					current_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}{ext}")
+				
+				fourcc = cv2.VideoWriter_fourcc(*codec)
+				writer = cv2.VideoWriter(current_path, fourcc, 30, (width, height))
+				
+				if writer.isOpened():
+					print(f"Successfully opened VideoWriter with codec {codec}")
+					video_writer = writer
+					video_path = current_path
+					saved_video_path = current_path  # Store successfully opened path
+					break
+				else:
+					print(f"Could not open VideoWriter with codec {codec}")
+					writer.release()
+			except Exception as e:
+				print(f"Error with codec {codec}: {e}")
+		
+		if video_writer is None:
+			print("Failed to initialize any VideoWriter. Falling back to image logging.")
+			if 'wandb' in globals() and wandb.run:
+				wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})
+			return total_reward, None
+			
+		# At this point we have a working video_writer
 		for frame in frames:
-			# OpenCV expects BGR images.
+			# OpenCV expects BGR images
 			frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 			video_writer.write(frame_bgr)
+		
 		video_writer.release()
+		print(f"Video writer released for {video_path}")
 		
 		# Verify the file exists and has content
 		if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-			print(f"Video successfully saved to {video_path}")
-			# Log the video and validation reward to WandB
-			wandb.log({
-				"validation_video": wandb.Video(video_path, fps=30, format="mp4"),
-				"validation_total_reward": total_reward
-			})
+			print(f"Video successfully saved to {video_path} with size {os.path.getsize(video_path)} bytes")
+			# Log the video and validation reward to WandB if available
+			if 'wandb' in globals() and wandb.run:
+				wandb.log({
+					"validation_video": wandb.Video(video_path, fps=30, format="mp4"),
+					"validation_total_reward": total_reward
+				})
+			return total_reward, video_path
 		else:
 			print(f"Failed to save video or file is empty: {video_path}")
+			if os.path.exists(video_path):
+				print(f"File exists but size is {os.path.getsize(video_path)} bytes")
+			else:
+				print(f"File does not exist at {video_path}")
 			# Log frames as images instead as a fallback
-			wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
+			if 'wandb' in globals() and wandb.run:
+				wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
+			return total_reward, None
 	except Exception as e:
+		import traceback
 		print(f"Error saving validation video: {e}")
+		print(traceback.format_exc())  # Print the full traceback
 		# Alternative: Save individual frames as images and log them
-		wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
+		if 'wandb' in globals() and wandb.run:
+			wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
+		return total_reward, None
 	
-	return total_reward
+	return total_reward, saved_video_path
 
 def train():
 	"""
@@ -501,7 +588,7 @@ def train():
 				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
 
 		if (epoch + 1) % VALIDATION_INTERVAL == 0:
-			val_reward = validate_policy(model, device)
+			val_reward, _ = validate_policy(model, device)  # Ignore the video path
 			print(f"Validation total reward at epoch {epoch+1}: {val_reward}")
 		
 		# Save a checkpoint every 10 epochs.
