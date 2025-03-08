@@ -47,7 +47,7 @@ class DiffusionPolicyInference:
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.no_grad()
-	def sample_action(self, state, image, num_ddim_steps=100):
+	def sample_action(self, state, image, num_ddim_steps=50):
 		"""
 		Generate a predicted action sequence using DDIM sampling.
 
