@@ -208,7 +208,7 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	total_reward = 0.0
 	done = False
 	steps = 0
-	max_steps = 100  # You can adjust the number of validation steps
+	max_steps = 100 * (WINDOW_SIZE // 2)  # You can adjust the number of validation steps
 
 	# Track previous observations for conditioning
 	prev_agent_pos = None
