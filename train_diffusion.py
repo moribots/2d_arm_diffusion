@@ -380,7 +380,7 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 			# Log the video and validation reward to WandB if available
 			if 'wandb' in globals() and wandb.run:
 				wandb.log({
-					"validation_video": wandb.Video(video_path, fps=30, format="mp4"),
+					"validation_video": wandb.Video(video_path, format="mp4"),  # Removed fps parameter
 					"validation_total_reward": total_reward
 				})
 			return total_reward, video_path
