@@ -522,7 +522,7 @@ def train():
 
 	# Load data.
 	dataset = PolicyDataset(TRAINING_DATA_DIR)
-	dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+	dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count()-1, pin_memory=True)
 
 	print("len dataloader", len(dataloader))
 	print("len dataset", len(dataset))
