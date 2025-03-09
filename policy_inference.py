@@ -46,7 +46,7 @@ class DiffusionPolicyInference:
 		self.normalize = Normalize.load(norm_stats_path, device=self.device)
 
 	@torch.inference_mode()
-	def sample_action(self, state, image, num_ddim_steps=200, guidance_scale=1.0, smoothing=True):
+	def sample_action(self, state, image, num_ddim_steps=200, smoothing=True):
 		"""
 		Generate a predicted action sequence using DDIM sampling.
 
@@ -55,7 +55,6 @@ class DiffusionPolicyInference:
 			image (Tensor or list/tuple): Either a single image or a pair [img_t-1, img_t],
 										  each of shape (B, 3, IMG_RES, IMG_RES).
 			num_ddim_steps (int): Number of DDIM sampling steps (default: 200).
-			guidance_scale (float): Guidance scale for classifier-free guidance (1.0 = no guidance).
 			smoothing (bool): Whether to apply temporal smoothing to the output.
 
 		Returns:
@@ -84,9 +83,7 @@ class DiffusionPolicyInference:
 			
 			# Predict x0 with more stable numerical computation
 			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t + eps) * eps_pred) / torch.sqrt(alpha_bar_t + eps)
-			
-			# Use soft clamping instead of hard clamping for smoother transitions
-			x0_pred = torch.tanh(x0_pred / max_clipped) * max_clipped
+			x0_pred = torch.clamp(x0_pred, -max_clipped, max_clipped)
 			
 			# Calculate next timestep with DDIM formulation
 			alpha_bar_t_next = self.alphas_cumprod[t_next].view(1, 1, 1) if t_next >= 0 else torch.tensor([1.0], device=self.device).view(1, 1, 1)
@@ -102,6 +99,7 @@ class DiffusionPolicyInference:
 			x_t = torch.sqrt(alpha_bar_t_next) * x0_pred + \
 				  torch.sqrt(1 - alpha_bar_t_next - sigma_t**2) * eps_pred + \
 				  sigma_t * noise
+			x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		
 		predicted_sequence_normalized = x_t[0, 1:, :]
 		
@@ -132,18 +130,15 @@ class DiffusionPolicyInference:
 		
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
 		
-		# Use soft clamping to screen bounds
-		screen_bounds = torch.tensor([SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1], device=self.device)
-		margin = 10.0  # Margin from screen edges
+		# Check if any values were clamped
+		before_clamp = predicted_sequence.clone()
+		predicted_sequence = torch.clamp(
+			predicted_sequence,
+			min=torch.tensor([0, 0], device=self.device),
+			max=torch.tensor([SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1], device=self.device))
 		
-		# Smoothly constrain values to be within bounds using sigmoid
-		scale = 0.1  # Controls smoothness of the constraint
-		lower_bound = torch.tensor([0.0, 0.0], device=self.device) + margin
-		upper_bound = screen_bounds - margin
-		
-		# Apply smooth boundary constraints
-		predicted_sequence = lower_bound + (upper_bound - lower_bound) * torch.sigmoid(
-			(predicted_sequence - lower_bound) / (upper_bound - lower_bound) / scale
-		)
+		if not torch.equal(before_clamp, predicted_sequence):
+			print(f'Warning: Some predicted actions were clamped to be within screen bounds {before_clamp[0]}')
+			print(f'Normalized predicted sequence: {predicted_sequence_normalized}')
 		
 		return predicted_sequence
