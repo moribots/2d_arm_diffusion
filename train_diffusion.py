@@ -207,66 +207,68 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	frames = []
 	total_reward = 0.0
 	done = False
-	steps = 0
-	max_steps = 100  # You can adjust the number of validation steps
+	fps = env.metadata['render_fps']
+	print(f'Sim FPS {fps}')
+	max_steps = 5 * (WINDOW_SIZE // 2) * fps
 
+	# Track previous observations for conditioning
 	prev_agent_pos = None
 	prev_image = None
 	
-	# Track action sequence and current position in sequence
-	action_buffer = []
-	current_action_idx = 0
-
-	# Create an instance of the inference wrapper using current model weights.
-	# We reuse DiffusionPolicyInference but override its model with our current model.
+	# Create an instance of the inference wrapper using current model weights
 	inference = DiffusionPolicyInference(model_path="", T=T, device=device, norm_stats_path=OUTPUT_DIR + "lerobot/normalization_stats.parquet")
 	inference.model = model  # Use current model weights
+	
+	# Track simulation time for proper action interpolation
+	start_time = 0.0
+	current_time = start_time
+
+	steps = 0
 
 	# Add tqdm progress bar
 	pbar = tqdm(total=max_steps, desc="Validation", leave=True)
 	try:
 		while not done and steps < max_steps:
-			 # Check if we need to resample actions (empty buffer or used half of window)
-			if len(action_buffer) == 0 or current_action_idx >= WINDOW_SIZE // 2:
-				# Build state from current and previous agent positions.
-				agent_pos_np = np.array(obs["agent_pos"])
-				agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
-				if prev_agent_pos is None:
-					state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
-				else:
-					state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
-				prev_agent_pos = agent_pos_tensor.clone()
-				
-				# Process current image: add batch dimension.
-				image_array = obs["pixels"]
-				if not isinstance(image_array, np.ndarray):
-					image_array = np.array(image_array, dtype=np.uint8)
-				current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
-				
-				# Use previous image if available; otherwise, duplicate.
-				if prev_image is None:
-					image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
-				else:
-					image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
-				prev_image = current_image_tensor.clone()
-				
-				# Sample a full window of actions
-				action_seq = inference.sample_action(state.to(device), image_tuple)
-				
-				# Store the sequence in our buffer
-				action_buffer = action_seq.cpu().numpy()
-				current_action_idx = 0
+			# Build state from current and previous agent positions
+			agent_pos_np = np.array(obs["agent_pos"])
+			agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
+			if prev_agent_pos is None:
+				state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
+			else:
+				state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
+			prev_agent_pos = agent_pos_tensor.clone()
 			
-			# Use the next action from our buffer
-			action = action_buffer[current_action_idx]
-			current_action_idx += 1
+			# Process current image: add batch dimension
+			image_array = obs["pixels"]
+			if not isinstance(image_array, np.ndarray):
+				image_array = np.array(image_array, dtype=np.uint8)
+			current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
+			
+			# Use previous image if available; otherwise, duplicate
+			if prev_image is None:
+				image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
+			else:
+				image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
+			prev_image = current_image_tensor.clone()
+			
+			# Get action from policy, providing current time for proper interpolation
+			# The inference class now handles all buffering and timing internally
+			action = inference.sample_action(
+				state.to(device), 
+				image_tuple, 
+				current_time=current_time
+			)
 
-			# Step the environment.
-			obs, reward, done, truncated, info = env.step(action)
+			# Step the environment
+			obs, reward, done, truncated, info = env.step(action.cpu().numpy())
 			total_reward += reward
+			
 			frame = env.render()
 			if frame is not None:
 				frames.append(frame)
+				
+			# Update time for next step (simulate real time passing)
+			current_time = start_time + (steps + 1) * (1.0 / fps)
 			steps += 1
 			
 			# Update progress bar with current reward
@@ -567,7 +569,7 @@ def train():
 		
 		# Save a checkpoint every 10 epochs.
 		if (epoch + 1) % 10 == 0:
-			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy_final.pth")
+			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 			print(f"Checkpoint overwritten at epoch {epoch+1}")
 		
 		# Update the learning rate scheduler.

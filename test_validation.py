@@ -95,7 +95,7 @@ class TestValidation(unittest.TestCase):
 		try:
 			api_key = UserSecretsClient().get_secret(secret_label)
 		except (KeyError, NameError):
-			api_key = None
+			api_key = "b716ec3f9f60902ae83d56040350b65a50d616b6"
 		
 		if api_key is None:
 			print("WANDB_API_KEY is not set. Tests that require WandB may fail.")
