@@ -33,6 +33,7 @@ import gym_pusht
 import cv2
 import time  # Should already be imported
 from tqdm import tqdm  # Add this import at the top
+from video_utils import save_video  # Import the new video utility
 
 def get_chunk_time_encoding(length: int):
 	"""
@@ -283,136 +284,49 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	
 	print(f'Validation total reward: {total_reward}, done: {done}, steps: {steps}')
 
-	# Write the captured frames to a video file with absolute path and better codec
-	height, width, _ = frames[0].shape
+	# Determine base directory for video
 	video_dir = os.path.join(OUTPUT_DIR, "videos")
 	os.makedirs(video_dir, exist_ok=True)
 	
-	# Generate a timestamp for unique identification
-	timestamp = int(time.time())
-	
-	# Check if wandb is initialized and has an active run
+	# Determine video identifier (wandb step or timestamp)
 	has_wandb_run = 'wandb' in globals() and wandb.run is not None
+	video_identifier = f"{wandb.run.step}" if has_wandb_run else f"{int(time.time())}"
 	
-	# Use a consistent video identifier that works with or without wandb
-	video_identifier = f"{wandb.run.step}" if has_wandb_run else f"{timestamp}"
+	# Handle local saving if requested
+	if save_locally:
+		if local_save_path is None:
+			local_dir = os.path.join(OUTPUT_DIR, "local_videos")
+			os.makedirs(local_dir, exist_ok=True)
+			local_save_path = os.path.join(local_dir, f"validation_video_local_{int(time.time())}.gif")
+		
+		# Save video locally without WandB logging
+		local_video_path, local_success = save_video(
+			frames,
+			os.path.dirname(local_save_path),
+			os.path.basename(local_save_path).split('.')[0],  # Use basename without extension as identifier
+			wandb_log=False,
+			use_gif=True  # Use GIF format for better compatibility
+		)
+		
+		if not local_success:
+			print(f"Failed to save video locally to {local_save_path}")
 	
-	# WandB only accepts specific formats - prioritize mp4
-	video_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}.mp4")
+	# Save/log the validation video with WandB integration
+	video_path, success = save_video(
+		frames,
+		video_dir,
+		video_identifier,
+		wandb_log=has_wandb_run,
+		wandb_key="validation_video",
+		additional_wandb_data={"validation_total_reward": total_reward},
+		use_gif=True  # Use GIF format for better compatibility
+	)
 	
-	# Debug: Check if the directory is writeable
-	print(f"Attempting to save video to: {video_path}")
-	if not os.access(os.path.dirname(video_path), os.W_OK):
-		print(f"Warning: Directory {os.path.dirname(video_path)} is not writeable!")
+	# Return the appropriate video path based on what was requested
+	if save_locally and 'local_video_path' in locals() and local_video_path:
+		return total_reward, local_video_path
 	
-	# Prioritize MP4-compatible codecs for WandB compatibility
-	try:
-		# List of codecs to try (prioritizing mp4 formats)
-		codecs_to_try = [
-			('mp4v', '.mp4'),  # MP4 codec - most compatible with WandB
-			('avc1', '.mp4'),  # H.264 in MP4 container
-			('H264', '.mp4'),  # H.264
-			('X264', '.mp4'),  # Another H.264 variant
-			('XVID', '.mp4'),  # MPEG-4 in MP4 container
-			('MJPG', '.mp4'),  # Try MJPG with .mp4 extension for WandB
-		]
-		
-		video_writer = None
-		saved_video_path = None
-		
-		# For explicit local saving, use the provided path or generate a default one
-		if save_locally and local_save_path is None:
-			videos_dir = os.path.join(OUTPUT_DIR, "local_videos")
-			os.makedirs(videos_dir, exist_ok=True)
-			# Always use .mp4 for compatibility
-			local_save_path = os.path.join(videos_dir, f"validation_video_local_{int(time.time())}.mp4")
-			
-		for codec, ext in codecs_to_try:
-			try:
-				print(f"Trying codec: {codec} with extension {ext}")
-				
-				# Always use .mp4 extension for WandB compatibility
-				current_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}{ext}")
-				
-				fourcc = cv2.VideoWriter_fourcc(*codec)
-				writer = cv2.VideoWriter(current_path, fourcc, 30, (width, height))
-				
-				if writer.isOpened():
-					print(f"Successfully opened VideoWriter with codec {codec}")
-					video_writer = writer
-					video_path = current_path
-					saved_video_path = current_path
-					break
-				else:
-					print(f"Could not open VideoWriter with codec {codec}")
-					writer.release()
-			except Exception as e:
-				print(f"Error with codec {codec}: {e}")
-		
-		if video_writer is None:
-			print("Failed to initialize any VideoWriter. Falling back to image logging.")
-			if 'wandb' in globals() and wandb.run:
-				wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})
-			return total_reward, None
-			
-		# At this point we have a working video_writer
-		for frame in frames:
-			# OpenCV expects BGR images
-			frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-			video_writer.write(frame_bgr)
-		
-		video_writer.release()
-		print(f"Video writer released for {video_path}")
-		
-		# Verify the file exists and has content
-		if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-			print(f"Video successfully saved to {video_path} with size {os.path.getsize(video_path)} bytes")
-			
-			# Verify file extension is compatible with WandB
-			file_ext = os.path.splitext(video_path)[1].lower()
-			if file_ext not in ['.mp4', '.gif', '.webm', '.ogg']:
-				print(f"Warning: File extension {file_ext} may not be compatible with WandB.")
-				
-				# If needed, convert to MP4 for WandB compatibility
-				if 'wandb' in globals() and wandb.run:
-					wandb_compatible_path = os.path.splitext(video_path)[0] + ".mp4"
-					try:
-						import ffmpeg
-						print(f"Converting to WandB-compatible format: {wandb_compatible_path}")
-						(
-							ffmpeg
-							.input(video_path)
-							.output(wandb_compatible_path)
-							.run(quiet=True, overwrite_output=True)
-						)
-						if os.path.exists(wandb_compatible_path):
-							video_path = wandb_compatible_path
-					except Exception as e:
-						print(f"Failed to convert video format: {e}")
-			
-			# Log the video and validation reward to WandB if available
-			if 'wandb' in globals() and wandb.run:
-				wandb.log({
-					"validation_video": wandb.Video(video_path, format="mp4"),  # Removed fps parameter
-					"validation_total_reward": total_reward
-				})
-			return total_reward, video_path
-		else:
-			print(f"Failed to save video or file is empty: {video_path}")
-			# Log frames as images instead as a fallback
-			if 'wandb' in globals() and wandb.run:
-				wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
-			return total_reward, None
-	except Exception as e:
-		import traceback
-		print(f"Error saving validation video: {e}")
-		print(traceback.format_exc())  # Print the full traceback
-		# Alternative: Save individual frames as images and log them
-		if 'wandb' in globals() and wandb.run:
-			wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
-		return total_reward, None
-	
-	return total_reward, saved_video_path
+	return total_reward, video_path
 
 def train():
 	"""

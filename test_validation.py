@@ -14,7 +14,15 @@ import numpy as np
 from config import *
 from diffusion_policy import DiffusionPolicy
 from train_diffusion import validate_policy
+from video_utils import save_video  # Import the new video utility
 import cv2
+import gymnasium as gym
+from PIL import Image
+import wandb
+try:
+    from kaggle_secrets import UserSecretsClient
+except ImportError:
+    pass  # Not running on Kaggle
 
 
 class MockModel(nn.Module):
@@ -42,6 +50,9 @@ class TestValidation(unittest.TestCase):
 		"""
 		Set up test environment and mock objects.
 		"""
+		 # Setup WandB login if needed
+		self.setup_wandb()
+		
 		# Create test directory for videos
 		self.test_dir = os.path.join(OUTPUT_DIR, "test_videos")
 		os.makedirs(self.test_dir, exist_ok=True)
@@ -69,6 +80,70 @@ class TestValidation(unittest.TestCase):
 		if not os.path.exists(norm_path):
 			normalize = Normalize.compute_from_limits()
 			normalize.save(norm_path)
+	
+	def setup_wandb(self):
+		"""
+		Set up WandB login using the same method as in the training script.
+		"""
+		# Check if wandb is already initialized
+		if hasattr(wandb, 'run') and wandb.run is not None:
+			print("WandB is already initialized, using existing session")
+			return
+			
+		# Retrieve the WandB API key from the environment variable
+		secret_label = "WANDB_API_KEY"
+		try:
+			api_key = UserSecretsClient().get_secret(secret_label)
+		except (KeyError, NameError):
+			api_key = None
+		
+		if api_key is None:
+			print("WANDB_API_KEY is not set. Tests that require WandB may fail.")
+		else:
+			# Log in to WandB using the API key
+			try:
+				wandb.login(key=api_key)
+				print("Successfully logged into WandB")
+			except Exception as e:
+				print(f"Failed to log into WandB: {e}")
+	
+	def test_with_wandb_logging(self):
+		"""
+		Test the validation and video saving with WandB logging enabled.
+		"""
+		# Initialize a WandB run for testing
+		try:
+			wandb.init(entity="moribots-personal", project="2d_arm_diffusion", 
+					   name="video_logging_test", job_type="testing")
+			
+			# Create synthetic frames for testing
+			frames = self.create_test_frames(30)  # 30 frames
+			
+			# Test saving with WandB logging
+			video_dir = os.path.join(self.test_dir, "wandb_test")
+			os.makedirs(video_dir, exist_ok=True)
+			
+			# Save the video with WandB logging enabled
+			video_path, success = save_video(
+				frames=frames,
+				base_path=video_dir,
+				video_identifier="wandb_test",
+				wandb_log=True,
+				wandb_key="test_video",
+				additional_wandb_data={"test_metric": 123.45}
+			)
+			
+			# Check results
+			self.assertTrue(success, "Video should save successfully")
+			self.assertTrue(os.path.exists(video_path), f"Video file should exist at {video_path}")
+			
+			# Clean up
+			wandb.finish()
+			
+		except Exception as e:
+			if wandb.run is not None:
+				wandb.finish()
+			self.fail(f"WandB test failed: {e}")
 
 	def load_real_model(self):
 		"""
@@ -116,13 +191,41 @@ class TestValidation(unittest.TestCase):
 		print("No valid model checkpoint found. Using mock model.")
 		return None
 
+	def create_test_frames(self, num_frames=30, width=320, height=240):
+		"""
+		Create synthetic frames for testing video saving.
+		
+		Args:
+			num_frames: Number of frames to generate
+			width: Frame width
+			height: Frame height
+			
+		Returns:
+			List of numpy arrays representing the frames
+		"""
+		frames = []
+		for i in range(num_frames):
+			# Create a frame with a colored rectangle
+			frame = np.zeros((height, width, 3), dtype=np.uint8)
+			color = (i * 8 % 256, 255 - (i * 8 % 256), 128)
+			top_left = (width//4, height//4)
+			bottom_right = (3*width//4, 3*height//4)
+			cv2.rectangle(frame, top_left, bottom_right, color, -1)
+			
+			# Add frame number text
+			cv2.putText(frame, f"Frame {i}", (width//4, height//8), 
+						cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+			
+			frames.append(frame)
+		return frames
+
 	def test_validate_policy_local_save(self):
 		"""
 		Test that validate_policy can correctly save a video locally.
 		"""
 		# Define local save path
 		timestamp = int(time.time())
-		local_save_path = os.path.join(self.test_dir, f"test_video_{timestamp}.avi")
+		local_save_path = os.path.join(self.test_dir, f"test_video_{timestamp}.mp4")
 		
 		# Ensure wandb doesn't interfere by setting mock run for test
 		import wandb
@@ -170,6 +273,112 @@ class TestValidation(unittest.TestCase):
 		
 		except Exception as e:
 			self.fail(f"Test failed with error: {str(e)}")
+
+	def test_direct_video_saving(self):
+		"""
+		Test the video saving utility directly with synthetic frames.
+		"""
+		# Create synthetic frames (colored rectangles)
+		frames = []
+		width, height = 320, 240
+		for i in range(30):  # 30 frames
+			# Create a frame with a colored rectangle
+			frame = np.zeros((height, width, 3), dtype=np.uint8)
+			color = (i * 8 % 256, 255 - (i * 8 % 256), 128)
+			top_left = (width//4, height//4)
+			bottom_right = (3*width//4, 3*height//4)
+			cv2.rectangle(frame, top_left, bottom_right, color, -1)
+			
+			# Add frame number text
+			cv2.putText(frame, f"Frame {i}", (width//4, height//8), 
+						cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+			
+			frames.append(frame)
+		
+		# Test saving with different options
+		test_cases = [
+			{"name": "standard", "path": os.path.join(self.test_dir, "standard")},
+			{"name": "high_fps", "path": os.path.join(self.test_dir, "high_fps"), "fps": 60},
+			{"name": "explicit_id", "path": os.path.join(self.test_dir, "explicit_id"), "id": "test_explicit"}
+		]
+		
+		for test_case in test_cases:
+			print(f"\nTesting video saving: {test_case['name']}")
+			os.makedirs(test_case["path"], exist_ok=True)
+			
+			kwargs = {
+				"frames": frames,
+				"base_path": test_case["path"],
+				"wandb_log": False  # Don't log to WandB during tests
+			}
+			
+			if "fps" in test_case:
+				kwargs["fps"] = test_case["fps"]
+			if "id" in test_case:
+				kwargs["video_identifier"] = test_case["id"]
+			
+			video_path, success = save_video(**kwargs)
+			
+			# Check results
+			print(f"Save result: success={success}, path={video_path}")
+			
+			if success:
+				self.assertIsNotNone(video_path)
+				self.assertTrue(os.path.exists(video_path))
+				self.assertGreater(os.path.getsize(video_path), 0)
+				
+				# Try opening the video
+				cap = cv2.VideoCapture(video_path)
+				self.assertTrue(cap.isOpened(), f"Cannot open video file {video_path}")
+				
+				# Get video properties
+				actual_fps = cap.get(cv2.CAP_PROP_FPS)
+				frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+					
+				# Clean up
+				cap.release()
+			else:
+				# If failed, should not return a path
+				self.assertIsNone(video_path)
+
+	def test_gif_saving(self):
+		"""
+		Test that GIFs can be successfully created and saved.
+		"""
+		# Create synthetic frames
+		frames = self.create_test_frames(30)  # 30 frames
+		
+		# Try saving as GIF
+		video_dir = os.path.join(self.test_dir, "gif_test")
+		os.makedirs(video_dir, exist_ok=True)
+		
+		# Save the video with GIF format
+		gif_path, success = save_video(
+			frames=frames,
+			base_path=video_dir,
+			video_identifier="gif_test",
+			wandb_log=False,
+			use_gif=True
+		)
+		
+		# Check results
+		self.assertTrue(success, "GIF should save successfully")
+		self.assertTrue(os.path.exists(gif_path), f"GIF file should exist at {gif_path}")
+		self.assertGreater(os.path.getsize(gif_path), 0, "GIF file should have content")
+		self.assertEqual(gif_path.endswith('.gif'), True, "File should have .gif extension")
+		
+		# Also test the frame grid functionality
+		from video_utils import save_frames_as_grid
+		grid_path, grid_success = save_frames_as_grid(
+			frames, 
+			video_dir, 
+			grid_size=(3, 3),
+			identifier="test_grid"
+		)
+		
+		self.assertTrue(grid_success, "Frame grid should save successfully")
+		self.assertTrue(os.path.exists(grid_path), f"Grid image should exist at {grid_path}")
+		self.assertGreater(os.path.getsize(grid_path), 0, "Grid image should have content")
 
 
 if __name__ == "__main__":
