@@ -105,6 +105,8 @@ class LeRobotSimulation(BaseSimulation):
 		self.policy_inference = None
 		self.prev_agent_pos = None
 		self.prev_image = None  # Stores previous image (t-1)
+		self.action_buffer = []  # Buffer to store predicted actions
+		self.current_action_idx = 0  # Track which action we're on
 		if self.mode == "inference":
 			recompute_normalization_stats(self.env_type, "lerobot/")
 			self.policy_inference = DiffusionPolicyInference(model_path="lerobot/diffusion_policy.pth",
@@ -148,6 +150,8 @@ class LeRobotSimulation(BaseSimulation):
 		self.episode_start_time = time.time()
 		self.prev_agent_pos = None
 		self.prev_image = None
+		self.action_buffer = []  # Reset action buffer
+		self.current_action_idx = 0  # Reset action index
 		self.observation, info = self.env.reset()
 		print("LeRobot session started.")
 
@@ -162,7 +166,8 @@ class LeRobotSimulation(BaseSimulation):
 		"""
 		Executes one simulation step.
 		In collection mode, uses mouse input.
-		In inference mode, uses the diffusion policy with two images.
+		In inference mode, uses the diffusion policy with two images,
+		reusing half of the predicted action sequence before re-sampling.
 		"""
 		done = False
 		truncated = False
@@ -173,28 +178,42 @@ class LeRobotSimulation(BaseSimulation):
 				mouse_pos[1] * ACTION_LIM / SCREEN_HEIGHT
 			], dtype=np.float32)
 		else:
-			# Build state from current and previous agent positions.
-			agent_pos_np = np.array(self.observation["agent_pos"])
-			agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
-			if self.prev_agent_pos is None:
-				state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
-			else:
-				state = torch.cat([self.prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
-			self.prev_agent_pos = agent_pos_tensor.clone()
-			# Process current image: add batch dimension.
-			image_array = self.observation["pixels"]
-			if not isinstance(image_array, np.ndarray):
-				image_array = np.array(image_array, dtype=np.uint8)
-			current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
-			# Use previous image if available; otherwise, duplicate.
-			if self.prev_image is None:
-				image_tuple = [current_image_tensor, current_image_tensor]
-			else:
-				image_tuple = [self.prev_image, current_image_tensor]
-			self.prev_image = current_image_tensor.clone()
-			predicted = self.policy_inference.sample_action(state, image_tuple)[0]
-			action = predicted.cpu().numpy().astype(np.float32)
-		# Step environment.
+				# Check if we need to resample actions (empty buffer or used half of window)
+			if len(self.action_buffer) == 0 or self.current_action_idx >= WINDOW_SIZE // 2:
+				# Build state from current and previous agent positions
+				agent_pos_np = np.array(self.observation["agent_pos"])
+				agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
+				if self.prev_agent_pos is None:
+					state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
+				else:
+					state = torch.cat([self.prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
+				self.prev_agent_pos = agent_pos_tensor.clone()
+				
+				# Process current image: add batch dimension
+				image_array = self.observation["pixels"]
+				if not isinstance(image_array, np.ndarray):
+					image_array = np.array(image_array, dtype=np.uint8)
+				current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
+				
+				# Use previous image if available; otherwise, duplicate
+				if self.prev_image is None:
+					image_tuple = [current_image_tensor, current_image_tensor]
+				else:
+					image_tuple = [self.prev_image, current_image_tensor]
+				self.prev_image = current_image_tensor.clone()
+				
+				# Sample a full window of actions
+				predicted_seq = self.policy_inference.sample_action(state, image_tuple)
+				
+				# Store the sequence in our buffer
+				self.action_buffer = predicted_seq.cpu().numpy()
+				self.current_action_idx = 0
+			
+			# Use the next action from our buffer
+			action = self.action_buffer[self.current_action_idx]
+			self.current_action_idx += 1
+		
+		# Step environment
 		next_observation, reward, done, truncated, info = self.env.step(action)
 		obs_list = self.observation["agent_pos"].tolist()
 		act_list = action.tolist()
@@ -219,7 +238,8 @@ class CustomSimulation(BaseSimulation):
 		self.object = Object(random_t_pose())
 		self.goal_pose = torch.tensor([212, 413, -math.pi / 3.0], dtype=torch.float32)
 		self.policy_inference = None
-		self.last_diffusion_actions = None
+		self.last_diffusion_actions = []  # Store as a list instead of None
+		self.current_action_idx = 0  # Track which action we're using
 		self.last_diffusion_update_time = 0.0
 		self.smoothed_target = None
 		self.prev_ee_pos = None
@@ -276,7 +296,8 @@ class CustomSimulation(BaseSimulation):
 		self.object.angular_velocity = 0.0
 		self.smoothed_target = None
 		self.prev_ee_pos = None
-		self.last_diffusion_actions = None
+		self.last_diffusion_actions = []  # Reset as an empty list
+		self.current_action_idx = 0  # Reset action index
 		self.last_diffusion_update_time = 0.0
 		self.last_target = None
 		self.prev_image = None
@@ -340,22 +361,29 @@ class CustomSimulation(BaseSimulation):
 		"""
 		Obtain the target input either from the diffusion policy (in inference mode)
 		or from mouse input (in collection mode).
+		Reuses half of the predicted action sequence before re-sampling.
 		"""
 		if self.mode == "inference":
-			current_time = time.time()
-			if (self.last_diffusion_actions is None or
-				len(self.last_diffusion_actions) == 0 or
-				(current_time - self.last_diffusion_update_time) >= SEC_PER_SAMPLE):
+			# Check if we need to resample actions (empty buffer or used half of window)
+			if (len(self.last_diffusion_actions) == 0 or 
+				self.current_action_idx >= min(len(self.last_diffusion_actions), WINDOW_SIZE // 2)):
+				
 				current_ee = self.arm.forward_kinematics()
 				if self.prev_ee_pos is None:
 					state = torch.cat([current_ee, current_ee], dim=0).unsqueeze(0)
 				else:
 					state = torch.cat([self.prev_ee_pos, current_ee], dim=0).unsqueeze(0)
+				
 				image = self.get_current_image_tensor(current_ee)
-				self.last_diffusion_actions = self.policy_inference.sample_action(state, image)
-				self.last_diffusion_update_time = current_time
-			target = self.last_diffusion_actions[0]
-			self.last_diffusion_actions = []
+				
+				# Sample a full window of actions
+				self.last_diffusion_actions = self.policy_inference.sample_action(state, image).cpu()
+				self.current_action_idx = 0
+				self.last_diffusion_update_time = time.time()
+			
+			# Use the next action from our buffer
+			target = self.last_diffusion_actions[self.current_action_idx]
+			self.current_action_idx += 1
 			self.last_target = target
 			return target
 		else:

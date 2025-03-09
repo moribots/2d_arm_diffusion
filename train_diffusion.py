@@ -211,6 +211,10 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 
 	prev_agent_pos = None
 	prev_image = None
+	
+	# Track action sequence and current position in sequence
+	action_buffer = []
+	current_action_idx = 0
 
 	# Create an instance of the inference wrapper using current model weights.
 	# We reuse DiffusionPolicyInference but override its model with our current model.
@@ -221,31 +225,40 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	pbar = tqdm(total=max_steps, desc="Validation", leave=True)
 	try:
 		while not done and steps < max_steps:
-			# Build state from current and previous agent positions.
-			agent_pos_np = np.array(obs["agent_pos"])
-			agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
-			if prev_agent_pos is None:
-				state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
-			else:
-				state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
-			prev_agent_pos = agent_pos_tensor.clone()
-			# Process current image: add batch dimension.
-			image_array = obs["pixels"]
-			if not isinstance(image_array, np.ndarray):
-				image_array = np.array(image_array, dtype=np.uint8)
-			current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
-			# Use previous image if available; otherwise, duplicate.
-			if prev_image is None:
-				image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
-			else:
-				image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
-			prev_image = current_image_tensor.clone()
+			 # Check if we need to resample actions (empty buffer or used half of window)
+			if len(action_buffer) == 0 or current_action_idx >= WINDOW_SIZE // 2:
+				# Build state from current and previous agent positions.
+				agent_pos_np = np.array(obs["agent_pos"])
+				agent_pos_tensor = torch.from_numpy(agent_pos_np).float()
+				if prev_agent_pos is None:
+					state = torch.cat([agent_pos_tensor, agent_pos_tensor], dim=0).unsqueeze(0)
+				else:
+					state = torch.cat([prev_agent_pos.clone(), agent_pos_tensor], dim=0).unsqueeze(0)
+				prev_agent_pos = agent_pos_tensor.clone()
+				
+				# Process current image: add batch dimension.
+				image_array = obs["pixels"]
+				if not isinstance(image_array, np.ndarray):
+					image_array = np.array(image_array, dtype=np.uint8)
+				current_image_tensor = image_transform(Image.fromarray(image_array)).unsqueeze(0)
+				
+				# Use previous image if available; otherwise, duplicate.
+				if prev_image is None:
+					image_tuple = [current_image_tensor.to(device), current_image_tensor.to(device)]
+				else:
+					image_tuple = [prev_image.to(device), current_image_tensor.to(device)]
+				prev_image = current_image_tensor.clone()
+				
+				# Sample a full window of actions
+				action_seq = inference.sample_action(state.to(device), image_tuple)
+				
+				# Store the sequence in our buffer
+				action_buffer = action_seq.cpu().numpy()
+				current_action_idx = 0
 			
-			# Use the inference method to sample an action sequence.
-			# The inference returns a sequence of shape (window_size, ACTION_DIM).
-			action_seq = inference.sample_action(state.to(device), image_tuple)
-			# For simplicity, choose the first action in the sequence.
-			action = action_seq[0].cpu().numpy()
+			# Use the next action from our buffer
+			action = action_buffer[current_action_idx]
+			current_action_idx += 1
 
 			# Step the environment.
 			obs, reward, done, truncated, info = env.step(action)
