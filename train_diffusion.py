@@ -533,9 +533,8 @@ def train():
 			else:
 				raise ValueError("Unexpected shape for action tensor")
 
-			# Sample diffusion timesteps in the middle range to avoid trivial training targets.
-			t_min = T // 10        # e.g., if T=1000, then t_min=100.
-			t_max = T - t_min      # e.g., then t_max=900.
+			t_min = 0
+			t_max = T - t_min
 			t_tensor = torch.randint(t_min, t_max, (action_seq.size(0),), device=device)
 
 			# Compute the noise scaling factor from the cumulative product of alphas.

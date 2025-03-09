@@ -108,14 +108,27 @@ class DiffusionPolicyInference:
 		# Apply temporal smoothing if enabled
 		if smoothing:
 			kernel_size = 3
-			# Simple moving average for temporal smoothness
-			kernel = torch.ones(1, 1, kernel_size, device=self.device) / kernel_size
-			# Pad to maintain sequence length
-			padded = F.pad(predicted_sequence_normalized.permute(1, 0).unsqueeze(0), 
-						  (kernel_size//2, kernel_size//2), mode='replicate')
-			# Apply convolution for smoothing
-			smoothed = F.conv1d(padded, kernel)
-			predicted_sequence_normalized = smoothed.squeeze(0).permute(1, 0)
+			 # Create a smoothed version of the actions
+			smoothed_sequence = torch.zeros_like(predicted_sequence_normalized)
+			
+			# Apply smoothing separately for each action dimension
+			for dim in range(predicted_sequence_normalized.shape[1]):
+				# Extract this dimension and add batch and channel dimensions
+				dim_data = predicted_sequence_normalized[:, dim].unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len]
+				
+				# Create 1D kernel for convolution
+				kernel = torch.ones(1, 1, kernel_size, device=self.device) / kernel_size
+				
+				# Pad to maintain sequence length
+				padded = F.pad(dim_data, (kernel_size//2, kernel_size//2), mode='replicate')
+				
+				# Apply convolution for smoothing
+				smoothed = F.conv1d(padded, kernel)
+				
+				# Store the smoothed result
+				smoothed_sequence[:, dim] = smoothed[0, 0, :]
+			
+			predicted_sequence_normalized = smoothed_sequence
 		
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
 		
