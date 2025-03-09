@@ -209,7 +209,7 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	total_reward = 0.0
 	done = False
 	steps = 0
-	max_steps = 300  # You can adjust the number of validation steps
+	max_steps = 100  # You can adjust the number of validation steps
 
 	prev_agent_pos = None
 	prev_image = None
@@ -482,6 +482,14 @@ def train():
 
 	# Define the MSE loss (without reduction) to optionally apply custom weighting.
 	mse_loss = nn.MSELoss(reduction="none")
+	
+	# Add temporal smoothness loss
+	def temporal_smoothness_loss(action_sequence):
+		"""Calculate temporal smoothness loss as the mean squared difference between consecutive actions"""
+		if action_sequence.shape[1] <= 1:
+			return torch.tensor(0.0, device=action_sequence.device)
+		diffs = action_sequence[:, 1:] - action_sequence[:, :-1]
+		return torch.mean(torch.sum(diffs**2, dim=-1))
 
 	# Generate the beta schedule and compute the cumulative product of alphas.
 	betas = get_beta_schedule(T)
@@ -491,6 +499,7 @@ def train():
 	# Training loop over epochs.
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
+		running_smoothness_loss = 0.0
 
 		# Loop over batches.
 		for batch_idx, batch in enumerate(dataloader):
@@ -555,8 +564,22 @@ def train():
 			else:
 				loss = torch.mean(loss_elements)
 			
+			# Add temporal smoothness loss to promote smoother actions
+			# This encourages temporally coherent action sequences
+			smooth_weight = 0.1  # Weight for the smoothness loss term
+			if epoch >= 10:  # Start applying smoothness loss after 10 epochs
+				smooth_loss = temporal_smoothness_loss(action_seq) * smooth_weight
+				total_loss = loss + smooth_loss
+				running_smoothness_loss += smooth_loss.item()
+			else:
+				total_loss = loss
+			
 			optimizer.zero_grad()
-			loss.backward()
+			total_loss.backward()
+			
+			# Gradient clipping to prevent exploding gradients
+			torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+			
 			optimizer.step()
 
 			running_loss += loss.item() * action_seq.size(0)
@@ -564,21 +587,29 @@ def train():
 			# Add batch-level logging (optional)
 			wandb.log({
 				"batch_loss": loss.item(),
+				"smoothness_loss": smooth_loss.item() if epoch >= 10 else 0.0,
 				"global_step": epoch * len(dataloader) + batch_idx
 			})
 
 		# Compute average loss for the epoch.
 		avg_loss = running_loss / len(dataset)
+		avg_smoothness_loss = running_smoothness_loss / len(dataloader) if epoch >= 10 else 0.0
 		current_lr = optimizer.param_groups[0]['lr']
 
 		# Log progress to TensorBoard and CSV.
-		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}")
+		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}, Smoothness Loss: {avg_smoothness_loss:.6f}")
 		writer.add_scalar("Loss/avg_loss", avg_loss, epoch+1)
+		writer.add_scalar("Loss/smoothness_loss", avg_smoothness_loss, epoch+1)
 		writer.add_scalar("LearningRate", current_lr, epoch+1)
-		csv_writer.writerow([epoch+1, avg_loss])
+		csv_writer.writerow([epoch+1, avg_loss, avg_smoothness_loss])
 		
 		# Log metrics to WandB.
-		wandb.log({"epoch": epoch+1, "avg_loss": avg_loss, "learning_rate": current_lr})
+		wandb.log({
+			"epoch": epoch+1, 
+			"avg_loss": avg_loss, 
+			"avg_smoothness_loss": avg_smoothness_loss,
+			"learning_rate": current_lr
+		})
 
 		# Log parameter histograms and gradient norms.
 		for name, param in model.named_parameters():
