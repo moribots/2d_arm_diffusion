@@ -5,7 +5,6 @@ Contains:
   - A time embedding module.
   - A multi-residual block U-Net architecture.
   - Scale and bias modulation via FiLM,	with group normalization and Mish activation.
-  - Enhanced temporal modeling with self-attention layers.
 
 Overall Architecture:
   
@@ -41,8 +40,7 @@ Overall Architecture:
 					|
 					v
 		  +----------------------+
-		  | Enhanced U-Net with  | <-- UNet1D predicts noise
-		  | temporal attention   |
+		  |        U-Net         | <-- UNet1D predicts noise
 		  +----------------------+
 					|
 					v
@@ -123,56 +121,6 @@ class FiLM(nn.Module):
 		bias = self.fc(cond).unsqueeze(-1)  # Shape: (B, channels, 1)
 		return x + bias
 
-class TemporalAttention(nn.Module):
-    """
-    Self-attention module for modeling temporal dependencies in action sequences.
-    
-    Applies multi-head self-attention across the temporal dimension to capture
-    long-range dependencies between action timesteps.
-    """
-    def __init__(self, channels, num_heads=4):
-        super().__init__()
-        self.num_heads = num_heads
-        self.norm = nn.GroupNorm(8, channels)
-        self.qkv = nn.Conv1d(channels, channels * 3, 1)
-        self.proj = nn.Conv1d(channels, channels, 1)
-        
-    def forward(self, x):
-        """
-        Apply temporal self-attention to input features.
-        
-        Args:
-            x (Tensor): Input tensor of shape (B, C, T)
-            
-        Returns:
-            Tensor: Output tensor with same shape after self-attention
-        """
-        B, C, T = x.shape
-        residual = x
-        
-        x = self.norm(x)
-        qkv = self.qkv(x)
-        qkv = qkv.reshape(B, 3, self.num_heads, C // self.num_heads, T)
-        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
-        
-        # Reshape for attention computation
-        q = q.permute(0, 1, 3, 2)  # B, num_heads, T, C//num_heads
-        k = k.permute(0, 1, 2, 3)  # B, num_heads, C//num_heads, T
-        v = v.permute(0, 1, 3, 2)  # B, num_heads, T, C//num_heads
-        
-        # Compute scaled dot-product attention
-        attn = (q @ k) * (1.0 / math.sqrt(C // self.num_heads))
-        attn = F.softmax(attn, dim=-1)
-        
-        # Apply attention weights to values
-        x = (attn @ v).permute(0, 1, 3, 2)  # B, num_heads, C//num_heads, T
-        x = x.reshape(B, C, T)
-        
-        # Project back to original dimension
-        x = self.proj(x)
-        
-        return x + residual
-
 class ResidualBlock1D(nn.Module):
 	"""
 	Residual block for 1D diffusion.
@@ -241,10 +189,9 @@ class ResidualBlock1D(nn.Module):
 
 class UNet1D(nn.Module):
 	"""
-	Enhanced 1D U-Net for denoising temporal action sequences.
-	
-	Includes temporal attention layers and increased capacity for better modeling
-	of complex temporal patterns and smoother output sequences.
+	A simplified 1D U-Net for denoising temporal action sequences for PushT task.
+	This lighter architecture has two encoder/decoder stages instead of three,
+	and uses smaller hidden dimensions appropriate for the simpler PushT task.
 	
 	Architecture Diagram:
 		Input (B, T, action_dim)
@@ -255,29 +202,24 @@ class UNet1D(nn.Module):
 				|
 		 Encoder Stage 1:
 			- 2 x ResidualBlock1D (hidden_dim)
-			 - Temporal Attention
 			- Save skip1, then Downsample (Conv1d, stride=2) -> hidden_dim * 2
 				|
 		 Encoder Stage 2:
 			- 2 x ResidualBlock1D (hidden_dim * 2)
-			 - Temporal Attention
 			- Save skip2, then Downsample (Conv1d, stride=2) -> hidden_dim * 2
 				|
 		 Bottleneck:
 			- 2 x ResidualBlock1D (hidden_dim * 2)
-			 - Temporal Attention
 				|
 		 Decoder Stage 2:
 			- Upsample (ConvTranspose1d)
 			- Concatenate skip2
 			- 2 x ResidualBlock1D (reduce channels to hidden_dim * 2)
-			 - Temporal Attention
 				|
 		 Decoder Stage 1:
 			- Upsample (ConvTranspose1d)
 			- Concatenate skip1
 			- 2 x ResidualBlock1D (reduce channels to hidden_dim)
-			 - Temporal Attention
 				|
 		 Final Conv (Conv1d) to project to action_dim
 				|
@@ -292,26 +234,22 @@ class UNet1D(nn.Module):
 	"""
 	def __init__(self, action_dim: int, cond_dim: int, hidden_dim: int = 256):
 		super().__init__()
-		self.hidden_dim = hidden_dim
-		
 		# Initial convolution: action_dim -> hidden_dim
 		self.initial_conv = nn.Conv1d(action_dim, hidden_dim, kernel_size=3, padding=1)
 		
-		# Encoder Stage 1
+		# Encoder Stage 1: 2 blocks at 64 channels, then downsample with stride=2 (channels remain 64).
 		self.enc1_block1 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
 		self.enc1_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
-		self.enc1_attn = TemporalAttention(hidden_dim)
+		 # Convert to 128 channels.
 		self.down1 = nn.Conv1d(hidden_dim, hidden_dim * 2, kernel_size=4, stride=2, padding=1)
 		
 		# Encoder Stage 2
 		self.enc2_block1 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
 		self.enc2_block2 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
-		self.enc2_attn = TemporalAttention(hidden_dim * 2)
 		
 		# Bottleneck
 		self.bottleneck_block1 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
 		self.bottleneck_block2 = ResidualBlock1D(hidden_dim * 2, hidden_dim * 2, cond_dim)
-		self.bottleneck_attn = TemporalAttention(hidden_dim * 2)
 		
 		# Decoder Stage 2 - Use transposed conv with parameters that exactly undo the downsampling
 		# kernel_size=4 and stride=2 with padding=1 and output_padding=0 will exactly double the temporal dimension
@@ -320,7 +258,6 @@ class UNet1D(nn.Module):
 		# Skip from stage 2 has 128 channels; concatenation yields 256 channels.
 		self.dec2_block1 = ResidualBlock1D(hidden_dim * 2 * 2, hidden_dim, cond_dim)
 		self.dec2_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
-		self.dec2_attn = TemporalAttention(hidden_dim)
 		
 		# Decoder Stage 1 - Same parameters to match dimensions exactly
 		self.up1 = nn.ConvTranspose1d(hidden_dim, hidden_dim, 
@@ -328,15 +265,12 @@ class UNet1D(nn.Module):
 		# Residual from stage 1 has 64 channels; concatenation yields 128 channels.
 		self.dec1_block1 = ResidualBlock1D(hidden_dim + hidden_dim, hidden_dim, cond_dim)
 		self.dec1_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
-		self.dec1_attn = TemporalAttention(hidden_dim)
 		
 		# Final projection
 		self.final_conv = nn.Conv1d(hidden_dim, action_dim, kernel_size=3, padding=1)
 
 	def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
 		"""
-		Forward pass with enhanced temporal modeling.
-		
 		Args:
 			x (Tensor): Input tensor of shape (B, T, action_dim).
 			cond (Tensor): Global conditioning tensor of shape (B, cond_dim).
@@ -355,20 +289,17 @@ class UNet1D(nn.Module):
 		# Encoder Stage 1
 		x1 = self.enc1_block1(x0, cond)
 		x1 = self.enc1_block2(x1, cond)
-		x1 = self.enc1_attn(x1)  # Apply temporal attention
 		skip1 = x1  # Skip from stage 1 (channels: hidden_dim)
 		x1_down = self.down1(x1)
 
 		# Encoder Stage 2
 		x2 = self.enc2_block1(x1_down, cond)
 		x2 = self.enc2_block2(x2, cond)
-		x2 = self.enc2_attn(x2)  # Apply temporal attention
 		skip2 = x2
 		
 		# Bottleneck
 		xb = self.bottleneck_block1(x2, cond)
 		xb = self.bottleneck_block2(xb, cond)
-		xb = self.bottleneck_attn(xb)  # Apply temporal attention
 		
 		# Decoder Stage 2 - The up2 operation should exactly match skip2's temporal dimension
 		x_up2 = self.up2(xb)
@@ -386,7 +317,6 @@ class UNet1D(nn.Module):
 		x_up2 = torch.cat([x_up2, skip2], dim=1)
 		x_up2 = self.dec2_block1(x_up2, cond)
 		x_up2 = self.dec2_block2(x_up2, cond)
-		x_up2 = self.dec2_attn(x_up2)  # Apply temporal attention
 		
 		# Decoder Stage 1 - The up1 operation should exactly match skip1's temporal dimension
 		x_up1 = self.up1(x_up2)
@@ -401,7 +331,6 @@ class UNet1D(nn.Module):
 		x_up1 = torch.cat([x_up1, skip1], dim=1)
 		x_up1 = self.dec1_block1(x_up1, cond)
 		x_up1 = self.dec1_block2(x_up1, cond)
-		x_up1 = self.dec1_attn(x_up1)  # Apply temporal attention
 		
 		# Final projection and rearrange output back to (B, T, action_dim)
 		out = self.final_conv(x_up1)
