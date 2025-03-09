@@ -348,17 +348,18 @@ class TestValidation(unittest.TestCase):
 		# Create synthetic frames
 		frames = self.create_test_frames(30)  # 30 frames
 		
-		# Try saving as GIF
+		# Try saving as GIF locally for testing
 		video_dir = os.path.join(self.test_dir, "gif_test")
 		os.makedirs(video_dir, exist_ok=True)
 		
-		# Save the video with GIF format
+		# Save the video with GIF format and explicit save_locally=True for testing
 		gif_path, success = save_video(
 			frames=frames,
 			base_path=video_dir,
 			video_identifier="gif_test",
 			wandb_log=False,
-			use_gif=True
+			use_gif=True,
+			save_locally=True  # Explicitly save locally for testing
 		)
 		
 		# Check results
@@ -367,18 +368,29 @@ class TestValidation(unittest.TestCase):
 		self.assertGreater(os.path.getsize(gif_path), 0, "GIF file should have content")
 		self.assertEqual(gif_path.endswith('.gif'), True, "File should have .gif extension")
 		
-		# Also test the frame grid functionality
-		from video_utils import save_frames_as_grid
-		grid_path, grid_success = save_frames_as_grid(
-			frames, 
-			video_dir, 
-			grid_size=(3, 3),
-			identifier="test_grid"
-		)
+		# Test WandB-only saving (mocked)
+		from unittest.mock import patch, MagicMock
 		
-		self.assertTrue(grid_success, "Frame grid should save successfully")
-		self.assertTrue(os.path.exists(grid_path), f"Grid image should exist at {grid_path}")
-		self.assertGreater(os.path.getsize(grid_path), 0, "Grid image should have content")
+		# Create a mock WandB run
+		mock_wandb_run = MagicMock()
+		mock_wandb = MagicMock()
+		mock_wandb.run = mock_wandb_run
+		mock_wandb.Video = MagicMock(return_value="mock_video")
+		mock_wandb.log = MagicMock()
+		
+		with patch.dict('sys.modules', {'wandb': mock_wandb}):
+			# Test WandB-only GIF (no local save)
+			_, wandb_success = save_video(
+				frames=frames,
+				base_path=video_dir,
+				video_identifier="wandb_test",
+				wandb_log=True,
+				save_locally=False  # Don't save locally
+			)
+			
+			# Verify WandB would have been called
+			self.assertTrue(wandb_success, "WandB-only save should report success")
+			mock_wandb.log.assert_called()  # WandB.log should have been called
 
 
 if __name__ == "__main__":

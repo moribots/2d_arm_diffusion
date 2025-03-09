@@ -305,7 +305,8 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 			os.path.dirname(local_save_path),
 			os.path.basename(local_save_path).split('.')[0],  # Use basename without extension as identifier
 			wandb_log=False,
-			use_gif=True  # Use GIF format for better compatibility
+			use_gif=True,  # Use GIF format for better compatibility
+			save_locally=True  # Explicitly save locally
 		)
 		
 		if not local_success:
@@ -319,7 +320,8 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 		wandb_log=has_wandb_run,
 		wandb_key="validation_video",
 		additional_wandb_data={"validation_total_reward": total_reward},
-		use_gif=True  # Use GIF format for better compatibility
+		use_gif=True,  # Use GIF format for better compatibility
+		save_locally=save_locally  # Only save locally if explicitly requested
 	)
 	
 	# Return the appropriate video path based on what was requested
