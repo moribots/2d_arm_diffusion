@@ -9,13 +9,11 @@ Notes:
 
 import os
 import json
-import csv  # For CSV dumps of training metrics.
 import math  # For cosine annealing scheduler.
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter  # For TensorBoard visualization.
 from diffusion_policy import DiffusionPolicy
 from diffusion_utils import get_beta_schedule, compute_alphas
 from config import *
@@ -285,6 +283,8 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	
 	# Use a consistent video identifier that works with or without wandb
 	video_identifier = f"{wandb.run.step}" if has_wandb_run else f"{timestamp}"
+	
+	# WandB only accepts specific formats - prioritize mp4
 	video_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}.mp4")
 	
 	# Debug: Check if the directory is writeable
@@ -292,17 +292,16 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	if not os.access(os.path.dirname(video_path), os.W_OK):
 		print(f"Warning: Directory {os.path.dirname(video_path)} is not writeable!")
 	
-	# Try multiple codec options to ensure compatibility
+	# Prioritize MP4-compatible codecs for WandB compatibility
 	try:
-		# List of codecs to try (format, extension)
+		# List of codecs to try (prioritizing mp4 formats)
 		codecs_to_try = [
-			('MJPG', '.avi'),
-			('mp4v', '.mp4'),
-			('H264', '.mp4'),
-			('avc1', '.mp4'),
-			('XVID', '.avi'),
-			('DIVX', '.avi'),
-			('X264', '.mp4')
+			('mp4v', '.mp4'),  # MP4 codec - most compatible with WandB
+			('avc1', '.mp4'),  # H.264 in MP4 container
+			('H264', '.mp4'),  # H.264
+			('X264', '.mp4'),  # Another H.264 variant
+			('XVID', '.mp4'),  # MPEG-4 in MP4 container
+			('MJPG', '.mp4'),  # Try MJPG with .mp4 extension for WandB
 		]
 		
 		video_writer = None
@@ -312,22 +311,15 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 		if save_locally and local_save_path is None:
 			videos_dir = os.path.join(OUTPUT_DIR, "local_videos")
 			os.makedirs(videos_dir, exist_ok=True)
-			local_save_path = os.path.join(videos_dir, f"validation_video_local_{int(time.time())}.avi")
+			# Always use .mp4 for compatibility
+			local_save_path = os.path.join(videos_dir, f"validation_video_local_{int(time.time())}.mp4")
 			
 		for codec, ext in codecs_to_try:
 			try:
 				print(f"Trying codec: {codec} with extension {ext}")
 				
-				# Determine which path to use
-				if save_locally and local_save_path is not None:
-					# If extension doesn't match the one in local_save_path, append it
-					if not local_save_path.endswith(ext):
-						base_path = os.path.splitext(local_save_path)[0]
-						current_path = f"{base_path}{ext}"
-					else:
-						current_path = local_save_path
-				else:
-					current_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}{ext}")
+				# Always use .mp4 extension for WandB compatibility
+				current_path = os.path.join(video_dir, f"validation_video_ep{video_identifier}{ext}")
 				
 				fourcc = cv2.VideoWriter_fourcc(*codec)
 				writer = cv2.VideoWriter(current_path, fourcc, 30, (width, height))
@@ -336,7 +328,7 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 					print(f"Successfully opened VideoWriter with codec {codec}")
 					video_writer = writer
 					video_path = current_path
-					saved_video_path = current_path  # Store successfully opened path
+					saved_video_path = current_path
 					break
 				else:
 					print(f"Could not open VideoWriter with codec {codec}")
@@ -362,6 +354,29 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 		# Verify the file exists and has content
 		if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
 			print(f"Video successfully saved to {video_path} with size {os.path.getsize(video_path)} bytes")
+			
+			# Verify file extension is compatible with WandB
+			file_ext = os.path.splitext(video_path)[1].lower()
+			if file_ext not in ['.mp4', '.gif', '.webm', '.ogg']:
+				print(f"Warning: File extension {file_ext} may not be compatible with WandB.")
+				
+				# If needed, convert to MP4 for WandB compatibility
+				if 'wandb' in globals() and wandb.run:
+					wandb_compatible_path = os.path.splitext(video_path)[0] + ".mp4"
+					try:
+						import ffmpeg
+						print(f"Converting to WandB-compatible format: {wandb_compatible_path}")
+						(
+							ffmpeg
+							.input(video_path)
+							.output(wandb_compatible_path)
+							.run(quiet=True, overwrite_output=True)
+						)
+						if os.path.exists(wandb_compatible_path):
+							video_path = wandb_compatible_path
+					except Exception as e:
+						print(f"Failed to convert video format: {e}")
+			
 			# Log the video and validation reward to WandB if available
 			if 'wandb' in globals() and wandb.run:
 				wandb.log({
@@ -371,10 +386,6 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 			return total_reward, video_path
 		else:
 			print(f"Failed to save video or file is empty: {video_path}")
-			if os.path.exists(video_path):
-				print(f"File exists but size is {os.path.getsize(video_path)} bytes")
-			else:
-				print(f"File does not exist at {video_path}")
 			# Log frames as images instead as a fallback
 			if 'wandb' in globals() and wandb.run:
 				wandb.log({"validation_frames": [wandb.Image(frame) for frame in frames[:10]]})  # Log first 10 frames
@@ -398,7 +409,7 @@ def train():
 	  - Loads data and prepares fixed-length action sequences with padding and masking.
 	  - Samples diffusion timesteps.
 	  - Computes the noise prediction loss with optional per-sample weighting factor based on the noise level.
-	  - Logs training metrics (loss, learning rate, gradients) to WandB, TensorBoard, and a CSV file.
+	  - Logs training metrics (loss, learning rate, gradients) to WandB.
 	  - Saves model checkpoints periodically.
 	"""
 	# Retrieve the WandB API key from the environment variable
@@ -426,12 +437,6 @@ def train():
 		"window_size": WINDOW_SIZE + 1,
 		"dataset": DATASET_TYPE
 	})
-
-	# Initialize TensorBoard writer and CSV logger.
-	writer = SummaryWriter(log_dir="runs/diffusion_policy_training")
-	csv_file = open("training_metrics.csv", "w", newline="")
-	csv_writer = csv.writer(csv_file)
-	csv_writer.writerow(["epoch", "avg_loss"])
 
 	# Enable benchmark mode for optimized performance on fixed-size inputs.
 	torch.backends.cudnn.benchmark = True
@@ -490,6 +495,17 @@ def train():
 			return torch.tensor(0.0, device=action_sequence.device)
 		diffs = action_sequence[:, 1:] - action_sequence[:, :-1]
 		return torch.mean(torch.sum(diffs**2, dim=-1))
+	
+	# Helper function to compute total gradient norm
+	def compute_grad_norm(parameters):
+		"""Compute the L2 norm of gradients for all parameters"""
+		total_norm = 0.0
+		parameters = list(filter(lambda p: p.grad is not None, parameters))
+		for p in parameters:
+			param_norm = p.grad.detach().norm(2)
+			total_norm += param_norm.item() ** 2
+		total_norm = total_norm ** 0.5
+		return total_norm
 
 	# Generate the beta schedule and compute the cumulative product of alphas.
 	betas = get_beta_schedule(T)
@@ -500,6 +516,8 @@ def train():
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
 		running_smoothness_loss = 0.0
+		running_grad_norm = 0.0
+		batch_count = 0
 
 		# Loop over batches.
 		for batch_idx, batch in enumerate(dataloader):
@@ -576,46 +594,43 @@ def train():
 			optimizer.zero_grad()
 			total_loss.backward()
 			
+			 # Calculate gradient norm before clipping
+			grad_norm = compute_grad_norm(model.parameters())
+			running_grad_norm += grad_norm
+			
 			# Gradient clipping to prevent exploding gradients
 			torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 			
 			optimizer.step()
 
 			running_loss += loss.item() * action_seq.size(0)
+			batch_count += 1
 
 			# Add batch-level logging (optional)
 			wandb.log({
 				"batch_loss": loss.item(),
 				"smoothness_loss": smooth_loss.item() if epoch >= 10 else 0.0,
+				"batch_grad_norm": grad_norm,  # Log per-batch gradient norm
 				"global_step": epoch * len(dataloader) + batch_idx
 			})
 
 		# Compute average loss for the epoch.
 		avg_loss = running_loss / len(dataset)
 		avg_smoothness_loss = running_smoothness_loss / len(dataloader) if epoch >= 10 else 0.0
+		avg_grad_norm = running_grad_norm / batch_count if batch_count > 0 else 0.0
 		current_lr = optimizer.param_groups[0]['lr']
 
-		# Log progress to TensorBoard and CSV.
-		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}, Smoothness Loss: {avg_smoothness_loss:.6f}")
-		writer.add_scalar("Loss/avg_loss", avg_loss, epoch+1)
-		writer.add_scalar("Loss/smoothness_loss", avg_smoothness_loss, epoch+1)
-		writer.add_scalar("LearningRate", current_lr, epoch+1)
-		csv_writer.writerow([epoch+1, avg_loss, avg_smoothness_loss])
+		# Log progress to console
+		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}, Smoothness Loss: {avg_smoothness_loss:.6f}, Grad Norm: {avg_grad_norm:.6f}")
 		
 		# Log metrics to WandB.
 		wandb.log({
 			"epoch": epoch+1, 
 			"avg_loss": avg_loss, 
 			"avg_smoothness_loss": avg_smoothness_loss,
+			"avg_grad_norm": avg_grad_norm,  # Log epoch average gradient norm
 			"learning_rate": current_lr
 		})
-
-		# Log parameter histograms and gradient norms.
-		for name, param in model.named_parameters():
-			writer.add_histogram(name, param, epoch+1)
-			if param.grad is not None:
-				grad_norm = param.grad.data.norm(2).item()
-				writer.add_scalar(f"Gradients/{name}_norm", grad_norm, epoch+1)
 
 		if (epoch + 1) % VALIDATION_INTERVAL == 0:
 			val_reward, _ = validate_policy(model, device)  # Ignore the video path
@@ -632,8 +647,6 @@ def train():
 	# Save the final model after training completes.
 	torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 	print(f"Training complete. Model saved as {OUTPUT_DIR}diffusion_policy.pth.")
-	writer.close()
-	csv_file.close()
 	wandb.finish()
 
 if __name__ == "__main__":
