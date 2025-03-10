@@ -230,9 +230,9 @@ class UNet1D(nn.Module):
 	Args:
 		action_dim (int): Dimensionality of the action space.
 		cond_dim (int): Dimensionality of the conditioning vector.
-		hidden_dim (int): Base hidden dimension (default: 256).
+		hidden_dim (int): Base hidden dimension (default: 512).
 	"""
-	def __init__(self, action_dim: int, cond_dim: int, hidden_dim: int = 256):
+	def __init__(self, action_dim: int, cond_dim: int, hidden_dim: int = 512):
 		super().__init__()
 		# Initial convolution: action_dim -> hidden_dim
 		self.initial_conv = nn.Conv1d(action_dim, hidden_dim, kernel_size=3, padding=1)
@@ -255,7 +255,7 @@ class UNet1D(nn.Module):
 		# kernel_size=4 and stride=2 with padding=1 and output_padding=0 will exactly double the temporal dimension
 		self.up2 = nn.ConvTranspose1d(hidden_dim * 2, hidden_dim * 2, 
 									  kernel_size=4, stride=2, padding=1, output_padding=0)
-		# Skip from stage 2 has 128 channels; concatenation yields 256 channels.
+		# Skip from stage 2 the name number of channels, so we double with concatenation.
 		self.dec2_block1 = ResidualBlock1D(hidden_dim * 2 * 2, hidden_dim, cond_dim)
 		self.dec2_block2 = ResidualBlock1D(hidden_dim, hidden_dim, cond_dim)
 		
@@ -373,7 +373,7 @@ class DiffusionPolicy(nn.Module):
 		self.global_cond_dim = combined_dim + time_embed_dim
 
 		# Use simplified the U-Net for denoi with smaller hidden_diming.
-		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=256)
+		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=512)
 
 	def forward(self, x, t, state, image):
 		"""
