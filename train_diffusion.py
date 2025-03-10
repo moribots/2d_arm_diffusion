@@ -419,14 +419,6 @@ def train():
 	# Define the MSE loss (without reduction) to optionally apply custom weighting.
 	mse_loss = nn.MSELoss(reduction="none")
 	
-	# Add temporal smoothness loss
-	def temporal_smoothness_loss(action_sequence):
-		"""Calculate temporal smoothness loss as the mean squared difference between consecutive actions"""
-		if action_sequence.shape[1] <= 1:
-			return torch.tensor(0.0, device=action_sequence.device)
-		diffs = action_sequence[:, 1:] - action_sequence[:, :-1]
-		return torch.mean(torch.sum(diffs**2, dim=-1))
-	
 	# Helper function to compute total gradient norm
 	def compute_grad_norm(parameters):
 		"""Compute the L2 norm of gradients for all parameters"""
@@ -446,7 +438,6 @@ def train():
 	# Training loop over epochs.
 	for epoch in range(EPOCHS):
 		running_loss = 0.0
-		running_smoothness_loss = 0.0
 		running_grad_norm = 0.0
 		batch_count = 0
 
@@ -512,18 +503,8 @@ def train():
 			else:
 				loss = torch.mean(loss_elements)
 			
-			# Add temporal smoothness loss to promote smoother actions
-			# This encourages temporally coherent action sequences
-			smooth_weight = 0.1  # Weight for the smoothness loss term
-			if epoch >= 10:  # Start applying smoothness loss after 10 epochs
-				smooth_loss = temporal_smoothness_loss(action_seq) * smooth_weight
-				total_loss = loss + smooth_loss
-				running_smoothness_loss += smooth_loss.item()
-			else:
-				total_loss = loss
-			
 			optimizer.zero_grad()
-			total_loss.backward()
+			loss.backward()
 			
 			 # Calculate gradient norm before clipping
 			grad_norm = compute_grad_norm(model.parameters())
@@ -540,25 +521,22 @@ def train():
 			# Add batch-level logging (optional)
 			wandb.log({
 				"batch_loss": loss.item(),
-				"smoothness_loss": smooth_loss.item() if epoch >= 10 else 0.0,
 				"batch_grad_norm": grad_norm,  # Log per-batch gradient norm
 				"global_step": epoch * len(dataloader) + batch_idx
 			})
 
 		# Compute average loss for the epoch.
 		avg_loss = running_loss / len(dataset)
-		avg_smoothness_loss = running_smoothness_loss / len(dataloader) if epoch >= 10 else 0.0
 		avg_grad_norm = running_grad_norm / batch_count if batch_count > 0 else 0.0
 		current_lr = optimizer.param_groups[0]['lr']
 
 		# Log progress to console
-		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}, Smoothness Loss: {avg_smoothness_loss:.6f}, Grad Norm: {avg_grad_norm:.6f}")
+		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}, Grad Norm: {avg_grad_norm:.6f}")
 		
 		# Log metrics to WandB.
 		wandb.log({
 			"epoch": epoch+1, 
 			"avg_loss": avg_loss, 
-			"avg_smoothness_loss": avg_smoothness_loss,
 			"avg_grad_norm": avg_grad_norm,  # Log epoch average gradient norm
 			"learning_rate": current_lr
 		})
