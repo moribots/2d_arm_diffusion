@@ -62,7 +62,7 @@ OPTIMIZER_LR = 1e-4 * np.sqrt(BATCH_SIZE_MULT)
 OPTIMIZER_BETAS = (0.95, 0.999)
 OPTIMIZER_EPS = 1e-8
 OPTIMIZER_WEIGHT_DECAY = 5e-5 # Aggressively prevent overfitting.
-SCHEDULER_WARMUP_STEPS = EPOCHS * 0.1
+SCHEDULER_WARMUP_STEPS = 10
 
 # Temporal window size for action sequence.
 WINDOW_SIZE = 14
