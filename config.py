@@ -91,7 +91,7 @@ image_transform = transforms.Compose([
 
 # Directories.
 TRAINING_DATA_DIR = "training_data"
-OUTPUT_DIR = ""
+OUTPUT_DIR = "" # OUTPUT_DIR = "/kaggle/working/"
 
 # Diffusion loss masking configuration.
 DO_MASK_LOSS_FOR_PADDING = True
