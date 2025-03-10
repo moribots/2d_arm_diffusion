@@ -568,7 +568,7 @@ def train():
 			print(f"Validation total reward at epoch {epoch+1}: {val_reward}")
 		
 		# Save a checkpoint every 10 epochs.
-		if (epoch + 1) % 10 == 0:
+		if (epoch + 1) % 50 == 0:
 			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 			print(f"Checkpoint overwritten at epoch {epoch+1}")
 		
