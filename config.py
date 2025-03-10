@@ -55,13 +55,13 @@ LINK_COLLISION_WEIGHT = 5.0
 T = 1000
 BATCH_SIZE_MULT = 1
 BATCH_SIZE = 64 * BATCH_SIZE_MULT
-EPOCHS = 900
+EPOCHS = 500
 VALIDATION_INTERVAL = 100
 # Settings from: https://github.com/huggingface/lerobot/blob/main/lerobot/common/policies/diffusion/configuration_diffusion.py#L154-L160
 OPTIMIZER_LR = 1e-4 * np.sqrt(BATCH_SIZE_MULT)
 OPTIMIZER_BETAS = (0.95, 0.999)
 OPTIMIZER_EPS = 1e-8
-OPTIMIZER_WEIGHT_DECAY = 1e-5 * BATCH_SIZE_MULT * 2
+OPTIMIZER_WEIGHT_DECAY = 1e-2 # Aggressively prevent overfitting.
 SCHEDULER_NAME = "cosine"
 SCHEDULER_WARMUP_STEPS = 0
 
