@@ -52,7 +52,7 @@ class DiffusionPolicyInference:
 		self.last_inference_time = 0.0
 		self.current_action_idx = 0
 
-	def _generate_action_sequence(self, state, image, num_ddim_steps=200, smoothing=True):
+	def _generate_action_sequence(self, state, image, num_ddim_steps=100, smoothing=True):
 		"""
 		Internal method to generate a full action sequence using DDIM sampling.
 		
@@ -77,7 +77,7 @@ class DiffusionPolicyInference:
 		# DDIM sampling with more steps for smoother denoising
 		for i in range(len(timesteps) - 1):
 			t_val = timesteps[i].item()
-			t_next = timesteps[i+1].item()
+			t_next = timesteps[i + 1].item()
 			t_tensor = torch.tensor([t_val], device=self.device).float()
 			alpha_bar_t = self.alphas_cumprod[t_val].view(1, 1, 1)
 			
@@ -85,23 +85,10 @@ class DiffusionPolicyInference:
 			eps_pred = self.model(x_t, t_tensor, state, image)
 			
 			# Predict x0 with more stable numerical computation
-			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t + eps) * eps_pred) / torch.sqrt(alpha_bar_t + eps)
+			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t + eps)
 			x0_pred = torch.clamp(x0_pred, -max_clipped, max_clipped)
-			
-			# Calculate next timestep with DDIM formulation
-			alpha_bar_t_next = self.alphas_cumprod[t_next].view(1, 1, 1) if t_next >= 0 else torch.tensor([1.0], device=self.device).view(1, 1, 1)
-			
-			# Improved DDIM update with less noise for later steps
-			sigma_t = 0.0
-			if t_next > 0:
-				sigma_t = self.betas[t_next] * (1 - alpha_bar_t) / (1 - alpha_bar_t_next)
-				sigma_t = torch.sqrt(sigma_t)
-				
-			# DDIM update with controlled noise
-			noise = torch.randn_like(x_t) if t_next > 0 else 0
-			x_t = torch.sqrt(alpha_bar_t_next) * x0_pred + \
-				  torch.sqrt(1 - alpha_bar_t_next - sigma_t**2) * eps_pred + \
-				  sigma_t * noise
+			alpha_bar_t_next = self.alphas_cumprod[t_next].view(1, 1, 1)
+			x_t = torch.sqrt(alpha_bar_t_next) * x0_pred + torch.sqrt(1 - alpha_bar_t_next) * eps_pred
 			x_t = torch.clamp(x_t, -max_clipped, max_clipped)
 		
 		# Throw out the 0-th index since that corresponds to the t-1 action.
