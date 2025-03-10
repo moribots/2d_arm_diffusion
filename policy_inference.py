@@ -65,7 +65,6 @@ class DiffusionPolicyInference:
 		Returns:
 			Tensor: Predicted action sequence.
 		"""
-		eps = 1e-5
 		max_clipped = 1.0
 		
 		# Create initial noise tensor with explicit integer dimensions
@@ -85,7 +84,7 @@ class DiffusionPolicyInference:
 			eps_pred = self.model(x_t, t_tensor, state, image)
 			
 			# Predict x0 with more stable numerical computation
-			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t + eps)
+			x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
 			x0_pred = torch.clamp(x0_pred, -max_clipped, max_clipped)
 			alpha_bar_t_next = self.alphas_cumprod[t_next].view(1, 1, 1)
 			x_t = torch.sqrt(alpha_bar_t_next) * x0_pred + torch.sqrt(1 - alpha_bar_t_next) * eps_pred
