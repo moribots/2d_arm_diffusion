@@ -95,7 +95,7 @@ class DiffusionPolicyInference:
 		
 		# Apply temporal smoothing if enabled
 		if smoothing:
-			kernel_size = 3
+			kernel_size = 1 # kernel size controls smoothing level.
 			# Create a smoothed version of the actions
 			smoothed_sequence = torch.zeros_like(predicted_sequence_normalized)
 			
