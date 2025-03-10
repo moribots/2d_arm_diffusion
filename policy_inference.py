@@ -173,8 +173,8 @@ class DiffusionPolicyInference:
 			self.last_inference_time = current_time
 			self.buffer_times = [current_time + i * SEC_PER_SAMPLE for i in range(buffer_size)]
 
-			print(f'Sampling new action sequence at time {current_time}')
-			print(f'Action Buffer: {self.action_buffer}')
+			# print(f'Sampling new action sequence at time {current_time}')
+			# print(f'Action Buffer: {self.action_buffer}')
 		
 		# Find the correct action(s) from the buffer based on time
 		current_idx = self.current_action_idx
