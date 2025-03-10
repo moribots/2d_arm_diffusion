@@ -62,8 +62,7 @@ OPTIMIZER_LR = 1e-4 * np.sqrt(BATCH_SIZE_MULT)
 OPTIMIZER_BETAS = (0.95, 0.999)
 OPTIMIZER_EPS = 1e-8
 OPTIMIZER_WEIGHT_DECAY = 1e-2 # Aggressively prevent overfitting.
-SCHEDULER_NAME = "cosine"
-SCHEDULER_WARMUP_STEPS = 0
+SCHEDULER_WARMUP_STEPS = EPOCHS * 0.1
 
 # Temporal window size for action sequence.
 WINDOW_SIZE = 14

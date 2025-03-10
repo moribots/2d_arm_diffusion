@@ -413,8 +413,30 @@ def train():
 		weight_decay=OPTIMIZER_WEIGHT_DECAY
 	)
 
-	# Set up a cosine annealing learning rate scheduler.
-	scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+	# Create a learning rate scheduler with warmup followed by cosine annealing
+	warmup_epochs = int(SCHEDULER_WARMUP_STEPS)  # Convert to int to ensure it's a whole number
+	
+	# Linear warmup scheduler - starts from 10% of base LR and increases linearly
+	warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+		optimizer, 
+		start_factor=0.1,  # Start with 10% of the base learning rate
+		end_factor=1.0,    # End with the full learning rate
+		total_iters=warmup_epochs
+	)
+	
+	# Cosine annealing scheduler for after warmup
+	cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+		optimizer,
+		T_max=EPOCHS - warmup_epochs,
+		eta_min=1e-6
+	)
+	
+	# Combine the schedulers using SequentialLR
+	scheduler = torch.optim.lr_scheduler.SequentialLR(
+		optimizer,
+		schedulers=[warmup_scheduler, cosine_scheduler],
+		milestones=[warmup_epochs]
+	)
 
 	# Define the MSE loss (without reduction) to optionally apply custom weighting.
 	mse_loss = nn.MSELoss(reduction="none")
