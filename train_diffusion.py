@@ -209,7 +209,7 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	done = False
 	fps = env.metadata['render_fps']
 	print(f'Sim FPS {fps}')
-	max_steps = 5 * (WINDOW_SIZE // 2) * fps
+	max_steps = 2 * (WINDOW_SIZE // 2) * fps
 
 	# Track previous observations for conditioning
 	prev_agent_pos = None
