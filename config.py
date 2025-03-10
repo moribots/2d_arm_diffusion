@@ -56,7 +56,7 @@ T = 1000
 BATCH_SIZE_MULT = 1
 BATCH_SIZE = 64 * BATCH_SIZE_MULT
 EPOCHS = 500
-VALIDATION_INTERVAL = 100
+VALIDATION_INTERVAL = 50
 # Settings from: https://github.com/huggingface/lerobot/blob/main/lerobot/common/policies/diffusion/configuration_diffusion.py#L154-L160
 OPTIMIZER_LR = 1e-4 * np.sqrt(BATCH_SIZE_MULT)
 OPTIMIZER_BETAS = (0.95, 0.999)
