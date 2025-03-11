@@ -564,7 +564,7 @@ def train():
 	)
 
 	# Create a learning rate scheduler with warmup followed by cosine annealing
-	warmup_epochs = int(SCHEDULER_WARMUP_STEPS)  # Convert to int to ensure it's a whole number
+	warmup_epochs = SCHEDULER_WARMUP_EPOCHS
 	
 	# Linear warmup scheduler - starts from 10% of base LR and increases linearly
 	warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
