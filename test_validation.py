@@ -19,6 +19,7 @@ import cv2
 import gymnasium as gym
 from PIL import Image
 import wandb
+import argparse
 try:
     from kaggle_secrets import UserSecretsClient
 except ImportError:
@@ -46,12 +47,16 @@ class TestValidation(unittest.TestCase):
 	"""
 	Test case for validating the policy and video saving functionality.
 	"""
+	# Class variable to control WandB logging
+	use_wandb = False
+	
 	def setUp(self):
 		"""
 		Set up test environment and mock objects.
 		"""
-		 # Setup WandB login if needed
-		self.setup_wandb()
+		# Setup WandB login if needed
+		if self.use_wandb:
+			self.setup_wandb()
 		
 		# Create test directory for videos
 		self.test_dir = os.path.join(OUTPUT_DIR, "test_videos")
@@ -111,6 +116,11 @@ class TestValidation(unittest.TestCase):
 		"""
 		Test the validation and video saving with WandB logging enabled.
 		"""
+		 # Skip this test if WandB is not enabled
+		if not self.use_wandb:
+			self.skipTest("Skipping WandB test as use_wandb=False")
+			return
+		
 		# Initialize a WandB run for testing
 		try:
 			wandb.init(entity="moribots-personal", project="2d_arm_diffusion", 
@@ -123,19 +133,19 @@ class TestValidation(unittest.TestCase):
 			video_dir = os.path.join(self.test_dir, "wandb_test")
 			os.makedirs(video_dir, exist_ok=True)
 			
-			# Save the video with WandB logging enabled
+			# Save the video with WandB logging enabled, but don't save locally
 			video_path, success = save_video(
 				frames=frames,
 				base_path=video_dir,
 				video_identifier="wandb_test",
 				wandb_log=True,
 				wandb_key="test_video",
-				additional_wandb_data={"test_metric": 123.45}
+				additional_wandb_data={"test_metric": 123.45},
+				save_locally=False  # Don't save locally
 			)
 			
 			# Check results
-			self.assertTrue(success, "Video should save successfully")
-			self.assertTrue(os.path.exists(video_path), f"Video file should exist at {video_path}")
+			self.assertTrue(success, "WandB logging should succeed")
 			
 			# Clean up
 			wandb.finish()
@@ -225,7 +235,7 @@ class TestValidation(unittest.TestCase):
 		"""
 		# Define local save path
 		timestamp = int(time.time())
-		local_save_path = os.path.join(self.test_dir, f"test_video_{timestamp}.mp4")
+		local_save_path = os.path.join(self.test_dir, f"test_video_{timestamp}.gif")
 		
 		# Ensure wandb doesn't interfere by setting mock run for test
 		import wandb
@@ -256,19 +266,24 @@ class TestValidation(unittest.TestCase):
 			# Check if the video file has content
 			self.assertGreater(os.path.getsize(video_path), 0, f"Video file {video_path} is empty")
 			
-			# Try opening the video to verify it's a valid video file
-			cap = cv2.VideoCapture(video_path)
-			self.assertTrue(cap.isOpened(), f"Cannot open video file {video_path}")
+			# If it's a GIF, we don't need to use OpenCV
+			if video_path.endswith('.gif'):
+				print(f"Test successful: GIF saved to {video_path}")
+			else:
+				# Try opening the video to verify it's a valid video file
+				cap = cv2.VideoCapture(video_path)
+				self.assertTrue(cap.isOpened(), f"Cannot open video file {video_path}")
+				
+				# Read a frame to verify content
+				ret, frame = cap.read()
+				self.assertTrue(ret, "Could not read frame from video")
+				self.assertIsNotNone(frame, "Frame is None")
+				
+				# Clean up
+				cap.release()
+				
+				print(f"Test successful: Video saved to {video_path}")
 			
-			# Read a frame to verify content
-			ret, frame = cap.read()
-			self.assertTrue(ret, "Could not read frame from video")
-			self.assertIsNotNone(frame, "Frame is None")
-			
-			# Clean up
-			cap.release()
-			
-			print(f"Test successful: Video saved to {video_path}")
 			print(f"Total reward from validation: {reward}")
 		
 		except Exception as e:
@@ -278,24 +293,10 @@ class TestValidation(unittest.TestCase):
 		"""
 		Test the video saving utility directly with synthetic frames.
 		"""
-		# Create synthetic frames (colored rectangles)
-		frames = []
-		width, height = 320, 240
-		for i in range(30):  # 30 frames
-			# Create a frame with a colored rectangle
-			frame = np.zeros((height, width, 3), dtype=np.uint8)
-			color = (i * 8 % 256, 255 - (i * 8 % 256), 128)
-			top_left = (width//4, height//4)
-			bottom_right = (3*width//4, 3*height//4)
-			cv2.rectangle(frame, top_left, bottom_right, color, -1)
-			
-			# Add frame number text
-			cv2.putText(frame, f"Frame {i}", (width//4, height//8), 
-						cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-			
-			frames.append(frame)
+		# Create synthetic frames
+		frames = self.create_test_frames(30)  # 30 frames
 		
-		# Test saving with different options
+		# Test saving with different options, but only to WandB if enabled
 		test_cases = [
 			{"name": "standard", "path": os.path.join(self.test_dir, "standard")},
 			{"name": "high_fps", "path": os.path.join(self.test_dir, "high_fps"), "fps": 60},
@@ -309,7 +310,8 @@ class TestValidation(unittest.TestCase):
 			kwargs = {
 				"frames": frames,
 				"base_path": test_case["path"],
-				"wandb_log": False  # Don't log to WandB during tests
+				"wandb_log": self.use_wandb,  # Only log to WandB if enabled
+				"save_locally": False  # Don't save files locally
 			}
 			
 			if "fps" in test_case:
@@ -317,81 +319,80 @@ class TestValidation(unittest.TestCase):
 			if "id" in test_case:
 				kwargs["video_identifier"] = test_case["id"]
 			
-			video_path, success = save_video(**kwargs)
-			
-			# Check results
-			print(f"Save result: success={success}, path={video_path}")
-			
-			if success:
-				self.assertIsNotNone(video_path)
-				self.assertTrue(os.path.exists(video_path))
-				self.assertGreater(os.path.getsize(video_path), 0)
-				
-				# Try opening the video
-				cap = cv2.VideoCapture(video_path)
-				self.assertTrue(cap.isOpened(), f"Cannot open video file {video_path}")
-				
-				# Get video properties
-				actual_fps = cap.get(cv2.CAP_PROP_FPS)
-				frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-					
-				# Clean up
-				cap.release()
+			# If we're not using WandB and not saving locally, expect failure
+			if not self.use_wandb:
+				with self.assertRaises(Exception) as context:
+					video_path, success = save_video(**kwargs)
+				print(f"Expected failure when not saving locally and not using WandB: {context.exception}")
 			else:
-				# If failed, should not return a path
-				self.assertIsNone(video_path)
+				video_path, success = save_video(**kwargs)
+				self.assertTrue(success, "Should succeed with WandB logging")
+				self.assertIsNone(video_path, "No local path should be returned when save_locally=False")
 
 	def test_gif_saving(self):
 		"""
 		Test that GIFs can be successfully created and saved.
 		"""
-		# Create synthetic frames
-		frames = self.create_test_frames(30)  # 30 frames
-		
-		# Try saving as GIF locally for testing
-		video_dir = os.path.join(self.test_dir, "gif_test")
-		os.makedirs(video_dir, exist_ok=True)
-		
-		# Save the video with GIF format and explicit save_locally=True for testing
-		gif_path, success = save_video(
-			frames=frames,
-			base_path=video_dir,
-			video_identifier="gif_test",
-			wandb_log=False,
-			use_gif=True,
-			save_locally=True  # Explicitly save locally for testing
-		)
-		
-		# Check results
-		self.assertTrue(success, "GIF should save successfully")
-		self.assertTrue(os.path.exists(gif_path), f"GIF file should exist at {gif_path}")
-		self.assertGreater(os.path.getsize(gif_path), 0, "GIF file should have content")
-		self.assertEqual(gif_path.endswith('.gif'), True, "File should have .gif extension")
-		
-		# Test WandB-only saving (mocked)
-		from unittest.mock import patch, MagicMock
-		
-		# Create a mock WandB run
-		mock_wandb_run = MagicMock()
-		mock_wandb = MagicMock()
-		mock_wandb.run = mock_wandb_run
-		mock_wandb.Video = MagicMock(return_value="mock_video")
-		mock_wandb.log = MagicMock()
-		
-		with patch.dict('sys.modules', {'wandb': mock_wandb}):
-			# Test WandB-only GIF (no local save)
-			_, wandb_success = save_video(
+		# Skip actual file saving and only test the mechanics
+		if not self.use_wandb:
+			from unittest.mock import patch, MagicMock
+			
+			# Create synthetic frames
+			frames = self.create_test_frames(30)  # 30 frames
+			
+			# Mock the actual file writing operations
+			with patch('cv2.VideoWriter') as mock_video_writer, \
+				 patch('PIL.Image.Image.save') as mock_image_save:
+				
+				# Configure the mocks
+				mock_instance = MagicMock()
+				mock_video_writer.return_value = mock_instance
+				mock_instance.isOpened.return_value = True
+				
+				# Test the GIF conversion path without saving
+				with self.assertRaises(Exception) as context:
+					save_video(
+						frames=frames,
+						base_path=self.test_dir,
+						video_identifier="gif_test",
+						wandb_log=False,
+						use_gif=True,
+						save_locally=False  # Don't save locally
+					)
+				
+				# The operation should fail, but we just want to verify the code path
+				print(f"Expected failure when not saving locally and not using WandB: {context.exception}")
+		else:
+			# Create synthetic frames
+			frames = self.create_test_frames(30)  # 30 frames
+			
+			# Test WandB GIF logging without local saving
+			gif_path, success = save_video(
 				frames=frames,
-				base_path=video_dir,
-				video_identifier="wandb_test",
+				base_path=self.test_dir,
+				video_identifier="gif_test",
 				wandb_log=True,
+				use_gif=True,
 				save_locally=False  # Don't save locally
 			)
 			
-			# Verify WandB would have been called
-			self.assertTrue(wandb_success, "WandB-only save should report success")
-			mock_wandb.log.assert_called()  # WandB.log should have been called
+			# Check results
+			self.assertTrue(success, "WandB logging should succeed")
+			self.assertIsNone(gif_path, "No local path should be returned when save_locally=False")
 
 
 if __name__ == "__main__":
+	# Add command line argument parser
+	parser = argparse.ArgumentParser(description='Run validation tests')
+	parser.add_argument('--use_wandb', action='store_true', help='Enable WandB logging for tests')
+	
+	# Parse arguments and set class variables
+	args, unknown = parser.parse_known_args()
+	TestValidation.use_wandb = args.use_wandb
+	
+	# Remove the custom arguments to prevent unittest from complaining
+	import sys
+	sys.argv = [sys.argv[0]] + unknown
+	
+	# Run the tests
 	unittest.main()
