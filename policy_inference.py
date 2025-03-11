@@ -146,7 +146,7 @@ class DiffusionPolicyInference:
 			smoothing (bool): Whether to apply temporal smoothing to the output.
 			
 		Returns:
-			Tensor: Current action to execute, properly interpolated.
+			tuple: (action_tensor, is_new_inference) - Current action and whether a new inference was performed
 		"""
 		# Use current system time if not provided
 		if current_time is None:
@@ -154,6 +154,9 @@ class DiffusionPolicyInference:
 			
 		# Normalize the state for model input
 		normalized_state = self.normalize.normalize_condition(state)
+		
+		 # Flag to track if new inference is performed
+		is_new_inference = False
 		
 		# Check if buffer is empty or if we need a new prediction
 		if len(self.action_buffer) == 0 or self.current_action_idx >= len(self.action_buffer):
@@ -173,6 +176,9 @@ class DiffusionPolicyInference:
 			self.last_inference_time = current_time
 			self.buffer_times = [current_time + i * SEC_PER_SAMPLE for i in range(buffer_size)]
 
+			 # Set flag to indicate new inference was performed
+			is_new_inference = True
+			
 			# print(f'Sampling new action sequence at time {current_time}')
 			# print(f'Action Buffer: {self.action_buffer}')
 		
@@ -188,7 +194,8 @@ class DiffusionPolicyInference:
 		if current_idx == len(self.action_buffer) - 1:
 			ret = self.action_buffer[current_idx].to(self.device).clone()
 			self.action_buffer = []
-			return ret
+			# Return the action and whether this was a new inference
+			return ret, is_new_inference
 		
 		# Interpolation case
 		current_action = self.action_buffer[current_idx]
@@ -201,4 +208,5 @@ class DiffusionPolicyInference:
 		# Linear interpolation between current and next action
 		interpolated_action = current_action * (1 - t) + next_action * t
 		
-		return interpolated_action.to(self.device)
+		# Return the action and whether this was a new inference
+		return interpolated_action.to(self.device), is_new_inference
