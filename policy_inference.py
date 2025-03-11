@@ -134,7 +134,7 @@ class DiffusionPolicyInference:
 		return predicted_sequence
 
 	@torch.inference_mode()
-	def sample_action(self, state, image, current_time=None, num_ddim_steps=200, smoothing=True):
+	def sample_action(self, state, image, current_time=None, num_ddim_steps=200, smoothing=False):
 		"""
 		Generate a predicted action or interpolated action based on the buffer state.
 		
