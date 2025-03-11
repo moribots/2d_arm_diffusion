@@ -373,7 +373,7 @@ class DiffusionPolicy(nn.Module):
 		self.global_cond_dim = combined_dim + time_embed_dim
 
 		# Use simplified the U-Net for denoi with smaller hidden_diming.
-		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=512)
+		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=256)
 
 	def forward(self, x, t, state, image):
 		"""
