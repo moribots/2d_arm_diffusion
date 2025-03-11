@@ -34,6 +34,8 @@ import cv2
 import time  # Should already be imported
 from tqdm import tqdm  # Add this import at the top
 from video_utils import save_video  # Import the new video utility
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 def get_chunk_time_encoding(length: int):
 	"""
@@ -198,8 +200,9 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 							   a default path will be used.
 
 	Returns:
-		tuple: (total_reward (float), video_path (str or None)) - Total reward accumulated during validation 
-			   and path to saved video (if successful and save_locally=True, else None).
+		tuple: (total_reward (float), video_path (str or None), action_plot_path (str or None)) - 
+			   Total reward accumulated during validation, path to saved video (if successful), 
+			   and path to action plot (if successful).
 	"""
 	# Create the environment using the LeRobot gym environment.
 	env = gym.make(LE_ROBOT_GYM_ENV_NAME, obs_type="pixels_agent_pos", render_mode="rgb_array")
@@ -222,6 +225,10 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	# Track simulation time for proper action interpolation
 	start_time = 0.0
 	current_time = start_time
+
+	# Initialize lists to track actions and timestamps for plotting
+	action_history = []
+	timestep_history = []
 
 	steps = 0
 
@@ -259,6 +266,10 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 				current_time=current_time
 			)
 
+			 # Record action for plotting
+			action_history.append(action.cpu().numpy())
+			timestep_history.append(current_time)
+
 			# Step the environment
 			obs, reward, done, truncated, info = env.step(action.cpu().numpy())
 			total_reward += reward
@@ -282,9 +293,14 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 
 	if len(frames) == 0:
 		print("No frames captured during validation.")
-		return total_reward, None
+		return total_reward, None, None
 	
 	print(f'Validation total reward: {total_reward}, done: {done}, steps: {steps}')
+
+	# Generate action plots
+	action_plot_path = None
+	if len(action_history) > 0:
+		action_plot_path = plot_actions(action_history, timestep_history)
 
 	# Determine base directory for video
 	video_dir = os.path.join(OUTPUT_DIR, "videos")
@@ -328,9 +344,143 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	
 	# Return the appropriate video path based on what was requested
 	if save_locally and 'local_video_path' in locals() and local_video_path:
-		return total_reward, local_video_path
+		return total_reward, local_video_path, action_plot_path
 	
-	return total_reward, video_path
+	return total_reward, video_path, action_plot_path
+
+def plot_actions(action_history, timestep_history):
+	"""
+	Plot each dimension of the actions over time using Plotly and save the plot.
+	
+	Marks the beginning of each policy inference window to visualize when
+	new actions were sampled from the diffusion model.
+	
+	Args:
+		action_history (list): List of action arrays from each timestep
+		timestep_history (list): List of timestep values corresponding to each action
+		
+	Returns:
+		str: Path to the saved plot or None if saving failed
+	"""
+	try:
+		# Convert lists to numpy arrays for easier handling
+		actions = np.array(action_history)
+		timesteps = np.array(timestep_history)
+		
+		# Get the number of action dimensions
+		action_dim = actions.shape[1]
+		
+		# Create plotly figure
+		fig = go.Figure()
+		
+		# Color palette for action dimensions
+		colors = ['rgb(31, 119, 180)', 'rgb(255, 127, 14)', 
+				  'rgb(44, 160, 44)', 'rgb(214, 39, 40)', 
+				  'rgb(148, 103, 189)', 'rgb(140, 86, 75)']
+		
+		# Plot each action dimension
+		for dim in range(action_dim):
+			color_idx = dim % len(colors)
+			fig.add_trace(go.Scatter(
+				x=timesteps, 
+				y=actions[:, dim],
+				mode='lines',
+				name=f'Action Dim {dim}',
+				line=dict(color=colors[color_idx], width=2),
+				hovertemplate='Time: %{x:.3f}<br>Value: %{y:.3f}'
+			))
+		
+		# Identify inference points - in this case, every timestep is an inference point
+		# But we can make the markers larger every N points to show major inference windows
+		inference_window = 5  # Mark every 5th step more prominently
+		for i, t in enumerate(timesteps):
+			# Add a marker for the first point and then every inference_window points
+			if i == 0 or i % inference_window == 0:
+				for dim in range(action_dim):
+					color_idx = dim % len(colors)
+					marker_size = 10 if i % inference_window == 0 else 6
+					marker_symbol = 'circle' if i % inference_window == 0 else 'circle-open'
+					
+					fig.add_trace(go.Scatter(
+						x=[t],
+						y=[actions[i, dim]],
+						mode='markers',
+						marker=dict(
+							color=colors[color_idx],
+							size=marker_size,
+							symbol=marker_symbol,
+							line=dict(width=2, color=colors[color_idx])
+						),
+						name=f"Inference point" if i == 0 else None,
+						showlegend=(i == 0 and dim == 0),  # Show only once in legend
+						hovertemplate=f'Inference at time: {t:.3f}<br>Action {dim}: {actions[i, dim]:.3f}'
+					))
+		
+		# Add vertical lines to indicate inference boundaries (every inference_window steps)
+		for i, t in enumerate(timesteps):
+			if i > 0 and i % inference_window == 0:
+				fig.add_vline(
+					x=t, 
+					line=dict(color="rgba(128, 128, 128, 0.5)", width=1, dash="dash"),
+					annotation_text=f"t={t:.2f}",
+					annotation_position="top right"
+				)
+		
+		# Update layout with improved formatting
+		fig.update_layout(
+			title="Action Dimensions Over Time",
+			xaxis_title="Timestep",
+			yaxis_title="Action Value",
+			legend_title="Dimensions",
+			font=dict(family="Arial, sans-serif", size=12),
+			hovermode="closest",
+			plot_bgcolor='rgba(250,250,250,0.9)',
+			width=1000,
+			height=600,
+			margin=dict(l=60, r=30, t=60, b=60)
+		)
+		
+		# Add grid
+		fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
+		fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(200,200,200,0.2)')
+		
+		# Ensure output directory exists
+		plot_dir = os.path.join(OUTPUT_DIR, "action_plots")
+		os.makedirs(plot_dir, exist_ok=True)
+		
+		# Generate unique filenames with timestamp
+		timestamp = int(time.time())
+		html_path = os.path.join(plot_dir, f"action_plot_{timestamp}.html")
+		png_path = os.path.join(plot_dir, f"action_plot_{timestamp}.png")
+		
+		# Save the plot as interactive HTML
+		fig.write_html(html_path)
+		
+		# Save as static image for WandB and other displays
+		fig.write_image(png_path)
+		
+		# Log to WandB if available
+		if 'wandb' in globals() and wandb.run is not None:
+			wandb.log({
+				"action_plot": wandb.Image(png_path),
+				"action_data": wandb.Table(
+					data=[[t, *a] for t, a in zip(timesteps, actions)],
+					columns=["timestep"] + [f"action_dim_{i}" for i in range(action_dim)]
+				)
+			})
+			# Also log the HTML file as an artifact
+			artifact = wandb.Artifact(f"action_plot_{timestamp}", type="plot")
+			artifact.add_file(html_path)
+			wandb.log_artifact(artifact)
+		
+		print(f"Action plot saved to {html_path} (interactive) and {png_path} (static)")
+		return png_path  # Return the path to the PNG for consistency with previous code
+	
+	except Exception as e:
+		print(f"Failed to create action plot: {e}")
+		import traceback
+		traceback.print_exc()
+		return None
 
 def train():
 	"""
@@ -503,7 +653,7 @@ def train():
 			alpha_bar = rearrange(alphas_cumprod[t_tensor], 'b -> b 1 1')
 			noise = torch.randn_like(action_seq)
 			# Compute the noisy action sequence using the forward diffusion process:
-			# x_t = sqrt(alpha_bar)*action_seq + sqrt(1 - alpha_bar)*noise.
+			# x_t = sqrt(alpha_bar)*action_seq + sqrt(1 - alpha_bar)*noise
 			x_t = torch.sqrt(alpha_bar) * action_seq + torch.sqrt(1 - alpha_bar) * noise
 
 			# Predict noise using the diffusion policy model.
@@ -524,17 +674,17 @@ def train():
 				loss = torch.mean(weight * loss_elements)
 			else:
 				loss = torch.mean(loss_elements)
-			
+
 			optimizer.zero_grad()
 			loss.backward()
-			
-			 # Calculate gradient norm before clipping
+
+			# Calculate gradient norm before clipping
 			grad_norm = compute_grad_norm(model.parameters())
 			running_grad_norm += grad_norm
-			
+
 			# Gradient clipping to prevent exploding gradients
 			torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-			
+
 			optimizer.step()
 
 			running_loss += loss.item() * action_seq.size(0)
@@ -550,35 +700,36 @@ def train():
 		# Compute average loss for the epoch.
 		avg_loss = running_loss / len(dataset)
 		avg_grad_norm = running_grad_norm / batch_count if batch_count > 0 else 0.0
-		current_lr = optimizer.param_groups[0]['lr']
 
 		# Log progress to console
 		print(f"Epoch {epoch+1}/{EPOCHS} - Loss: {avg_loss:.6f}, Grad Norm: {avg_grad_norm:.6f}")
-		
+
 		# Log metrics to WandB.
+		current_lr = optimizer.param_groups[0]['lr']
 		wandb.log({
-			"epoch": epoch+1, 
-			"avg_loss": avg_loss, 
+			"epoch": epoch+1,
+			"avg_loss": avg_loss,
 			"avg_grad_norm": avg_grad_norm,  # Log epoch average gradient norm
 			"learning_rate": current_lr
 		})
 
-		if (epoch + 1) % VALIDATION_INTERVAL == 0:
-			val_reward, _ = validate_policy(model, device)  # Ignore the video path
-			print(f"Validation total reward at epoch {epoch+1}: {val_reward}")
-		
+		# Update the learning rate scheduler.
+		scheduler.step()
+
 		# Save a checkpoint every 10 epochs.
 		if (epoch + 1) % 50 == 0:
 			torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 			print(f"Checkpoint overwritten at epoch {epoch+1}")
-		
-		# Update the learning rate scheduler.
-		scheduler.step()
+
+		# Validate the policy periodically.
+		if (epoch + 1) % VALIDATION_INTERVAL == 0:
+			val_reward, _, _ = validate_policy(model, device)  # Ignore the video path and action plot path
+			print(f"Validation total reward at epoch {epoch+1}: {val_reward}")
 
 	# Save the final model after training completes.
 	torch.save(model.state_dict(), OUTPUT_DIR + "diffusion_policy.pth")
 	print(f"Training complete. Model saved as {OUTPUT_DIR}diffusion_policy.pth.")
-	wandb.finish()
 
 if __name__ == "__main__":
 	train()
+	wandb.finish()

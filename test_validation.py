@@ -249,8 +249,8 @@ class TestValidation(unittest.TestCase):
 			print("Running test with real trained model")
 		
 		try:
-			# Run validation with local saving
-			reward, video_path = validate_policy(
+			# Run validation with local saving - now expecting 3 return values
+			reward, video_path, action_plot_path = validate_policy(
 				model=self.model, 
 				device=self.device,
 				save_locally=True,
@@ -283,6 +283,28 @@ class TestValidation(unittest.TestCase):
 				cap.release()
 				
 				print(f"Test successful: Video saved to {video_path}")
+			
+			# Check if an action plot was generated
+			if action_plot_path is not None:
+				print(f"Action plot generated at: {action_plot_path}")
+				
+				# Check if the plot file exists
+				self.assertTrue(os.path.exists(action_plot_path), f"Plot file {action_plot_path} does not exist")
+				
+				# Check if the plot file has content
+				self.assertGreater(os.path.getsize(action_plot_path), 0, f"Plot file {action_plot_path} is empty")
+				
+				# If the plot is HTML, try opening it in a browser
+				if action_plot_path.endswith('.html'):
+					import webbrowser
+					try:
+						# Try to open the HTML file in a browser
+						webbrowser.open('file://' + os.path.abspath(action_plot_path))
+						print("Opening action plot in browser...")
+					except Exception as e:
+						print(f"Could not open plot in browser: {e}")
+			else:
+				print("No action plot was generated.")
 			
 			print(f"Total reward from validation: {reward}")
 		
