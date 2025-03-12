@@ -78,7 +78,7 @@ class DiffusionPolicyInference:
 		max_clipped = 1.0
 
 		# Initialize the diffusion process.
-		if warm_start is not None:
+		if False: # warm_start is not None:
 			# Use the provided warm_start sequence to initialize the beginning timesteps.
 			warm_len = warm_start.shape[0]
 			x_t = torch.zeros((1, WINDOW_SIZE + 1, ACTION_DIM), device=self.device)

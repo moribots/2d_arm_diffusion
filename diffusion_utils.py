@@ -23,7 +23,7 @@ def get_beta_schedule(T: int, s: float = 0.008) -> torch.Tensor:
 	# Generate T+1 linearly spaced time points from 0 to T (inclusive)
 	timesteps = torch.linspace(0, T, T + 1)
 	# Compute cumulative product of alphas using the squared cosine function
-	alpha_bar = torch.cos(((timesteps / T + s) / (1 + s)) * (torch.pi / 2)) ** 2
+	alpha_bar = torch.cos(((timesteps / (T + s)) / (1 + s)) * (torch.pi / 2)) ** 2
 	betas = []
 	for t in range(T):
 		# Compute beta_t as the relative drop between consecutive alpha_bar values

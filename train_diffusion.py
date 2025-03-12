@@ -179,12 +179,9 @@ class PolicyDataset(Dataset):
 		else:
 			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
 		action = self.normalize.normalize_action(action)
-		if "time_index" in sample:
-			time_idx = torch.tensor(sample["time_index"], dtype=torch.float32)
-			max_t = float(time_idx[-1]) if time_idx[-1] > 0 else 1.0
-			time_seq = time_idx / max_t
-		else:
-			time_seq = get_chunk_time_encoding(action.shape[0])
+		time_index = torch.tensor(sample["time_index"], dtype=torch.float32)
+		max_t = float(time_index[-1])
+		time_seq = time_index / max_t
 		return condition, image, action, time_seq
 
 def validate_policy(model, device, save_locally=False, local_save_path=None):
@@ -212,7 +209,7 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 	done = False
 	fps = env.metadata['render_fps']
 	print(f'Sim FPS {fps}')
-	max_steps = 2 * (WINDOW_SIZE // 2) * fps
+	max_steps = 150
 
 	# Track previous observations for conditioning
 	prev_agent_pos = None
@@ -863,7 +860,7 @@ def train():
 	secret_label = "WANDB_API_KEY"
 	try:
 		api_key = UserSecretsClient().get_secret(secret_label)
-	except KeyError:
+	except NameError:
 		api_key = None
 
 	if api_key is None:
