@@ -79,10 +79,11 @@ class DiffusionPolicyInference:
 
 		# Initialize the diffusion process.
 		if warm_start is not None:
-			# Use the provided warm_start sequence to initialize the beginning timesteps.
+			# Initialize the input noise using the last output.
 			warm_len = warm_start.shape[0]
 			x_t = torch.zeros((1, WINDOW_SIZE + 1, ACTION_DIM), device=self.device)
-			x_t[0, :warm_len, :] = warm_start  # fill first warm_len steps with warm_start
+			# fill first warm_len steps with warm_start
+			x_t[0, :warm_len, :] = warm_start
 			# Fill remaining timesteps with small random noise.
 			noise = 0.0005 * torch.randn((1, WINDOW_SIZE + 1 - warm_len, ACTION_DIM), device=self.device)
 			x_t[0, warm_len:, :] = noise
@@ -160,7 +161,7 @@ class DiffusionPolicyInference:
 			warm_start = None
 			if self.last_full_sequence is not None:
 				# Use the first quarter-window of the previous sequence.
-				warm_start = self.last_full_sequence[:(WINDOW_SIZE // 4)]
+				warm_start = self.last_full_sequence[:(WINDOW_SIZE // 2)]
 			# Generate a new full action sequence.
 			full_sequence = self._generate_action_sequence(
 				normalized_state, image, num_ddim_steps, smoothing, warm_start=warm_start
@@ -168,7 +169,7 @@ class DiffusionPolicyInference:
 			# Store the full sequence for future warm-starting.
 			self.last_full_sequence = full_sequence.clone()
 			# For execution, use only a portion of the sequence.
-			buffer_size = min(WINDOW_SIZE // 4, full_sequence.shape[0])
+			buffer_size = min(WINDOW_SIZE // 2, full_sequence.shape[0])
 			self.action_buffer = full_sequence[:buffer_size]
 			self.current_action_idx = 0
 
