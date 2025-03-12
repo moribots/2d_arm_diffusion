@@ -13,6 +13,13 @@ import numpy as np
 import os
 import torch.nn.functional as F
 import time
+# Set random seeds for reproducibility.
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+	torch.cuda.manual_seed_all(seed)
 
 class DiffusionPolicyInference:
 	"""

@@ -54,6 +54,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from config import *
 from visual_encoder import VisualEncoder
+# Set random seeds for reproducibility.
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+	torch.cuda.manual_seed_all(seed)
 
 def get_sinusoidal_embedding(t, dim):
 	"""
