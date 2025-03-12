@@ -379,7 +379,7 @@ class DiffusionPolicy(nn.Module):
 		combined_dim = 2 * (CONDITION_DIM + IMAGE_FEATURE_DIM)
 		self.global_cond_dim = combined_dim + time_embed_dim
 
-		# Use simplified the U-Net for denoi with smaller hidden_diming.
+		# U-Net with two down/up sampling stages with skip connections for noise prediction.
 		self.unet = UNet1D(action_dim=int(action_dim), cond_dim=self.global_cond_dim, hidden_dim=256)
 
 	def forward(self, x, t, state, image):
