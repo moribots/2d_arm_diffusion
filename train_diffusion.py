@@ -261,7 +261,6 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 			action, is_new_inference = inference.sample_action(
 				state.to(device),
 				image_tuple,
-				num_ddim_steps=100,
 				smoothing=False
 			)
 
@@ -456,7 +455,6 @@ def compare_to_training_data(model, device):
 					pred_action, is_new_inference = inference.sample_action(
 						condition,
 						image_tuple,
-						num_ddim_steps=100,
 						smoothing=False
 					)
 
@@ -564,7 +562,6 @@ def compare_to_training_data(model, device):
 					action = inference.sample_action(
 						current_condition,
 						current_image_tuple,
-						num_ddim_steps=100,  # Use a moderate number of steps for efficiency
 						smoothing=False
 					)
 

@@ -148,7 +148,7 @@ def print_settings():
 			'Demo Frames': DEMO_DATA_FRAMES,
 			'Image Resolution': IMG_RES
 		},
-		'Training Options:': {
+		'Training Options': {
 			'Mask Loss for Padding': DO_MASK_LOSS_FOR_PADDING,
 			'Sqrt Alpha Bar Weighting': DO_SQRT_ALPHA_BAR_WEIGHTING
 		}

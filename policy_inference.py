@@ -57,7 +57,7 @@ class DiffusionPolicyInference:
 		self.current_action_idx = 0
 		self.last_full_sequence = None  # Stores the full previously generated action sequence
 
-	def _generate_action_sequence(self, state, image, num_ddim_steps=100, smoothing=True, warm_start=None):
+	def _generate_action_sequence(self, state, image, num_ddim_steps=100, smoothing=False, warm_start=None):
 		"""
 		Generate a full action sequence using DDIM sampling.
 
@@ -78,16 +78,15 @@ class DiffusionPolicyInference:
 		max_clipped = 1.0
 
 		# Initialize the diffusion process.
-		if False: # warm_start is not None:
+		if warm_start is not None:
 			# Use the provided warm_start sequence to initialize the beginning timesteps.
 			warm_len = warm_start.shape[0]
 			x_t = torch.zeros((1, WINDOW_SIZE + 1, ACTION_DIM), device=self.device)
 			x_t[0, :warm_len, :] = warm_start  # fill first warm_len steps with warm_start
 			# Fill remaining timesteps with small random noise.
-			noise = 0.0001 * torch.randn((1, WINDOW_SIZE + 1 - warm_len, ACTION_DIM), device=self.device)
+			noise = 0.0005 * torch.randn((1, WINDOW_SIZE + 1 - warm_len, ACTION_DIM), device=self.device)
 			x_t[0, warm_len:, :] = noise
 		else:
-			print(f'No warm start provided; initializing full sequence from standard Gaussian noise.')
 			x_t = torch.randn((1, WINDOW_SIZE + 1, ACTION_DIM), device=self.device)
 
 		# Select timesteps for DDIM sampling (cosine-paced).
@@ -114,18 +113,6 @@ class DiffusionPolicyInference:
 		# Remove the first element which corresponds to the t-1 action.
 		predicted_sequence_normalized = x_t[0, 1:, :]
 
-		# Optionally apply temporal smoothing.
-		if smoothing:
-			kernel_size = 1  # adjust kernel size to control smoothing level
-			smoothed_sequence = torch.zeros_like(predicted_sequence_normalized)
-			for dim in range(predicted_sequence_normalized.shape[1]):
-				dim_data = predicted_sequence_normalized[:, dim].unsqueeze(0).unsqueeze(0)  # shape: [1, 1, seq_len]
-				kernel = torch.ones(1, 1, kernel_size, device=self.device) / kernel_size
-				padded = F.pad(dim_data, (kernel_size // 2, kernel_size // 2), mode='replicate')
-				smoothed = F.conv1d(padded, kernel)
-				smoothed_sequence[:, dim] = smoothed[0, 0, :]
-			predicted_sequence_normalized = smoothed_sequence
-
 		# Unnormalize the action sequence.
 		predicted_sequence = self.normalize.unnormalize_action(predicted_sequence_normalized)
 
@@ -143,7 +130,7 @@ class DiffusionPolicyInference:
 		return predicted_sequence  # shape: (WINDOW_SIZE, ACTION_DIM)
 
 	@torch.inference_mode()
-	def sample_action(self, state, image, num_ddim_steps=200, smoothing=False):
+	def sample_action(self, state, image, num_ddim_steps=100, smoothing=False):
 		"""
 		Generate a predicted action or interpolated action based on the buffer state.
 
@@ -172,8 +159,8 @@ class DiffusionPolicyInference:
 			# Use the tail of the previous full sequence as warm start if available.
 			warm_start = None
 			if self.last_full_sequence is not None:
-				# Use the first half-window of the previous sequence.
-				warm_start = self.last_full_sequence[:(WINDOW_SIZE // 2)]
+				# Use the first quarter-window of the previous sequence.
+				warm_start = self.last_full_sequence[:(WINDOW_SIZE // 4)]
 			# Generate a new full action sequence.
 			full_sequence = self._generate_action_sequence(
 				normalized_state, image, num_ddim_steps, smoothing, warm_start=warm_start
@@ -181,7 +168,7 @@ class DiffusionPolicyInference:
 			# Store the full sequence for future warm-starting.
 			self.last_full_sequence = full_sequence.clone()
 			# For execution, use only a portion of the sequence.
-			buffer_size = min(WINDOW_SIZE // 2, full_sequence.shape[0])
+			buffer_size = min(WINDOW_SIZE // 4, full_sequence.shape[0])
 			self.action_buffer = full_sequence[:buffer_size]
 			self.current_action_idx = 0
 
