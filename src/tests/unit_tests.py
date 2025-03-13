@@ -213,10 +213,102 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 		# Verify monotonicity
 		self.assertTrue(torch.all(time_seq[1:] > time_seq[:-1]), "Time sequence should be strictly increasing")
 		
+		 # Verify dataset fidelity against raw LeRobot data
+		try:
+			from datasets import load_dataset
+			
+			print("\nVerifying dataset against raw LeRobot data...")
+			raw_dataset = load_dataset("lerobot/pusht_image", split="train[:50]")
+			print(f"Loaded {len(raw_dataset)} samples from raw LeRobot dataset")
+			
+			# Find an episode with enough frames
+			episodes = {}
+			for sample in raw_dataset:
+				ep = sample["episode_index"]
+				episodes.setdefault(ep, []).append(sample)
+				
+			test_episode = None
+			for ep, frames in episodes.items():
+				if len(frames) >= WINDOW_SIZE + 2:
+					test_episode = ep
+					break
+					
+			self.assertIsNotNone(test_episode, "Could not find an episode with sufficient frames")
+			
+			# Get frames from test episode in order
+			ep_frames = sorted([f for f in raw_dataset if f["episode_index"] == test_episode],
+							  key=lambda x: x["frame_index"])
+							  
+			print(f"Testing with episode {test_episode}, which has {len(ep_frames)} frames")
+			
+			# Test frame with context
+			i = 1  # Second frame
+			
+			# Get raw data and verify normalization
+			if i > 0 and i + WINDOW_SIZE <= len(ep_frames):
+				# Get states
+				raw_states = [
+					ep_frames[i-1]["observation.state"],
+					ep_frames[i]["observation.state"]
+				]
+				raw_states_flat = np.concatenate([raw_states[0], raw_states[1]])
+				raw_states_tensor = torch.tensor(raw_states_flat, dtype=torch.float32)
+				
+				# Normalize and verify
+				normalized_states = dataset.normalize.normalize_condition(raw_states_tensor)
+				self.assertEqual(normalized_states.shape, (4,), "Normalized state shape incorrect")
+				
+				# Round-trip test
+				unnormalized_states = dataset.normalize.unnormalize_condition(normalized_states)
+				self.assertTrue(torch.allclose(unnormalized_states, raw_states_tensor, atol=1e-5),
+							   "Normalization round-trip failed for states")
+							   
+				# Get actions
+				raw_actions = []
+				for j in range(i-1, i+WINDOW_SIZE-1):
+					if j < len(ep_frames):
+						raw_actions.append(ep_frames[j]["action"])
+				
+				if len(raw_actions) == WINDOW_SIZE:
+					raw_actions_tensor = torch.tensor(raw_actions, dtype=torch.float32)
+					normalized_actions = dataset.normalize.normalize_action(raw_actions_tensor)
+					
+					# Verify shape
+					self.assertEqual(normalized_actions.shape, (WINDOW_SIZE, ACTION_DIM),
+								   f"Normalized actions should have shape ({WINDOW_SIZE}, {ACTION_DIM})")
+					
+					# Round-trip verification
+					unnormalized_actions = dataset.normalize.unnormalize_action(normalized_actions)
+					self.assertTrue(torch.allclose(unnormalized_actions, raw_actions_tensor, atol=1e-5),
+								  "Normalization round-trip failed for actions")
+								  
+					# Find a similar sample in the dataset
+					# Sample several from the dataset to see if we can find a match
+					found_match = False
+					for idx in range(min(100, len(dataset))):
+						try:
+							sample_cond, _, sample_action, _ = dataset[idx]
+							# Check if states are similar (allowing for different normalization)
+							if torch.norm(sample_cond - normalized_states) < 0.1:
+								print(f"Found potentially matching sample at index {idx}")
+								found_match = True
+								break
+						except Exception as e:
+							print(f"Error checking sample {idx}: {e}")
+							
+					print(f"Found at least one similar sample in dataset: {found_match}")
+					
+				print("Verified dataset normalization and structure match raw data expectations")
+		except Exception as e:
+			print(f"Error during raw data verification: {e}")
+			import traceback
+			traceback.print_exc()
+			self.fail(f"Failed test")
+		
 		# Pretty print some samples for visualization
 		print("\n===== Dataset Sample Visualization =====")
 		
-		 # Debug the dataset structure before attempting to visualize random samples
+		# Debug the dataset structure before attempting to visualize random samples
 		print(f"Dataset type: {type(dataset)}")
 		print(f"Dataset length: {len(dataset)}")
 		

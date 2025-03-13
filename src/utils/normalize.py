@@ -78,6 +78,20 @@ class Normalize:
 		# Normalize from [condition_min, condition_max] to [-1, 1]
 		return 2.0 * ((condition - self.condition_min) / (self.condition_max - self.condition_min + eps)) - 1.0
 	
+	def unnormalize_condition(self, condition: torch.Tensor) -> torch.Tensor:
+		"""
+		Revert normalization on an condition tensor.
+
+		Args:
+			action (Tensor): Normalized condition tensor.
+			eps (float): Epsilon to avoid division by zero.
+
+		Returns:
+			Tensor: Original condition tensor.
+		"""
+		# Un-normalize from [-1, 1] to [action_min, action_max]
+		return ((condition + 1.0) / 2.0) * (self.condition_max - self.condition_min) + self.condition_min
+	
 	def normalize_action(self, action: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 		"""
 		Normalize an action tensor using min–max normalization.
