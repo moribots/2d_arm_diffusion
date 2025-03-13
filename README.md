@@ -10,6 +10,95 @@ The next steps in this project involve collecting data, and then training a diff
 
 ![Demo](demo.gif)
 
+## Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/moribots/2d-arm-diffusion.git
+cd 2d-arm-diffusion
+
+# Create a virtual environment
+python -m venv venv
+
+# Source your virtual environment.
+source venv/bin/activate
+
+# Install dependencies
+pip install -e .
+```
+
+## Usage
+
+### Training a diffusion policy
+
+```bash
+python train_diffusion.py
+```
+
+### Running the simulation environment
+
+```bash
+python simulation.py --mode collection --env custom
+```
+
+### Testing an existing policy
+
+```bash
+python simulation.py --mode inference --env lerobot
+```
+
+### Running validation
+
+```bash
+python test_validation.py
+```
+
+## Project Structure
+
+```markdown
+├── configs
+├── demo.gif
+├── __init__.py
+├── lerobot
+│   ├── diffusion_policy.pth
+│   └── normalization_stats.parquet
+├── README.md
+├── requirements.txt
+├── setup.py
+└── src
+	 ├── config.py
+	 ├── data
+	 │   └── processors
+	 ├── diffusion
+	 │   ├── diffusion_policy.py
+	 │   ├── models.py
+	 │   ├── policy_inference.py
+	 │   ├── train_diffusion.py
+	 │   └── visual_encoder.py
+	 ├── lerobot
+	 │   └── training_data
+	 ├── notebooks
+	 │   └── generate_notebook.py
+	 ├── seed.py
+	 ├── simulation
+	 │   ├── arm.py
+	 │   ├── object.py
+	 │   └── simulation.py
+	 ├── tests
+	 │   ├── test_validation.py
+	 │   └── unit_tests.py
+	 └── utils
+		  ├── diffusion_utils.py
+		  ├── normalize.py
+		  ├── utils.py
+		  └── video_utils.py
+```
+
+To update, run `tree -I "venv|__pycache__|*.pyc" <path>`
+## License
+
+MIT License
+
 # Diffusion
 
 Diffusion policy is an innovative method that generates robot actions by starting with pure noise and then iteratively “denoising” that noise until a smooth and coherent action sequence emerges. In this guide, we explain the key concepts and derivations behind diffusion policy in a beginner-friendly way.
@@ -47,7 +136,7 @@ The reverse diffusion process aims to **remove the noise** and recover a clean a
 
 1. **Noise Prediction:**
 
-   The network, denoted by $\epsilon_\theta$, takes the noisy sequence $x_t$, the current timestep $t$, and conditioning information (such as the robot’s state and visual cues) as inputs, and predicts the noise:
+	The network, denoted by $\epsilon_\theta$, takes the noisy sequence $x_t$, the current timestep $t$, and conditioning information (such as the robot’s state and visual cues) as inputs, and predicts the noise:
 
 $$
 \epsilon_\theta(x_t, t, \text{cond})
@@ -55,7 +144,7 @@ $$
 
 2. **Recovering the Clean Signal:**
 
-   We rearrange the forward equation to compute an estimate of the original signal $x_0$:
+	We rearrange the forward equation to compute an estimate of the original signal $x_0$:
 
 $$
 x_0^{\text{pred}} = \frac{x_t - \sqrt{1 - \bar{\alpha}_t}\, \epsilon_\theta(x_t, t, \text{cond})}{\sqrt{\bar{\alpha}_t}}
@@ -63,7 +152,7 @@ $$
 
 3. **Training Loss:**
 
-   The network is trained using the mean squared error (MSE) loss between the predicted noise and the actual noise:
+	The network is trained using the mean squared error (MSE) loss between the predicted noise and the actual noise:
 
 $$
 L = \mathbb{E}\left[\left\| \epsilon - \epsilon_\theta(x_t, t, \text{cond}) \right\|^2\right]
@@ -141,13 +230,13 @@ $$
 
 2. **Deterministic Update:**
 
-   For a selected pair of timesteps $t$ and $t_{\text{next}}$, update:
+	For a selected pair of timesteps $t$ and $t_{\text{next}}$, update:
 
 $$
 x_{t_{\text{next}}} = \sqrt{\bar{\alpha}_{t_{\text{next}}}} \, x_0^{\text{pred}} + \sqrt{1 - \bar{\alpha}_{t_{\text{next}}}} \, \epsilon_\theta(x_t, t, \text{cond})
 $$
 
-   By setting a parameter $\eta = 0$ (i.e., no extra noise is added), the process becomes deterministic.
+	By setting a parameter $\eta = 0$ (i.e., no extra noise is added), the process becomes deterministic.
 
 **Benefit:**  
 Using DDIM significantly speeds up inference because it requires far fewer network forward passes while still generating a high-quality, denoised action sequence.
@@ -188,7 +277,7 @@ E_{\text{pos}} = \|p_{\text{ee}} - p_{\text{target}}\|^2
 $$
 
 2. **Collision Penalties:**
-   For non-adjacent links, a penalty is added when the distance $d$ between segments is below a threshold $d_{\text{thresh}}$:
+	For non-adjacent links, a penalty is added when the distance $d$ between segments is below a threshold $d_{\text{thresh}}$:
 
 $$
 E_{\text{collision}} = \begin{cases}
