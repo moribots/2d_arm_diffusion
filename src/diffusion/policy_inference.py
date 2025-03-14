@@ -35,7 +35,6 @@ class DiffusionPolicyInference:
 		self.model = DiffusionPolicy(
 			action_dim=int(ACTION_DIM),
 			condition_dim=int(CONDITION_DIM),
-			time_embed_dim=128,
 			window_size=int(WINDOW_SIZE)
 		).to(self.device)
 		new_state_dict = {}

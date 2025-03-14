@@ -772,7 +772,6 @@ def train():
 	model = DiffusionPolicy(
 		action_dim=ACTION_DIM,
 		condition_dim=CONDITION_DIM,
-		time_embed_dim=128,
 		window_size=WINDOW_SIZE
 	)
 	device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
