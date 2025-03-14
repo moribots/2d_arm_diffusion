@@ -14,6 +14,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
+import argparse
 from src.config import *
 from src.utils.diffusion_utils import get_beta_schedule, compute_alphas
 from src.diffusion.diffusion_policy import DiffusionPolicy, UNet1D, ResidualBlock1D, FiLM
@@ -414,8 +415,11 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				plt.ylabel("Y coordinate")
 				plt.grid(True)
 				plt.legend()
-				plt.show(block=False)  # <-- Changed to non-blocking
-				plt.pause(0.1)  # Small pause to render the plot
+				if 'DISPLAY_PLOTS' in globals() and DISPLAY_PLOTS:
+					plt.show(block=False)
+					plt.pause(0.1)
+				else:
+					plt.close()
 
 				# Display the images using matplotlib - with proper denormalization
 				fig, axes = plt.subplots(1, 2, figsize=(12, 5))
@@ -453,8 +457,11 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 
 				plt.suptitle(f"Input Images (Sample {idx})")
 				plt.tight_layout()
-				plt.show(block=False)  # <-- Changed to non-blocking
-				plt.pause(0.1)  # Small pause to render the plot
+				if 'DISPLAY_PLOTS' in globals() and DISPLAY_PLOTS:
+					plt.show(block=False)
+					plt.pause(0.1)
+				else:
+					plt.close()
 
 				# Alternative visualization with pure PIL (just in case)
 				try:
@@ -475,8 +482,11 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 						plt.axis('off')
 
 					plt.tight_layout()
-					plt.show(block=False)  # <-- Changed to non-blocking
-					plt.pause(0.1)  # Small pause to render the plot
+					if 'DISPLAY_PLOTS' in globals() and DISPLAY_PLOTS:
+						plt.show(block=False)
+						plt.pause(0.1)
+					else:
+						plt.close()
 				except Exception as e:
 					print(f"PIL visualization failed: {e}")
 
@@ -1018,8 +1028,11 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 					plt.legend()
 					
 					plt.tight_layout()
-					plt.show(block=False)
-					plt.pause(0.1)  # Small pause to render
+					if 'DISPLAY_PLOTS' in globals() and DISPLAY_PLOTS:
+						plt.show(block=False)
+						plt.pause(0.1)
+					else:
+						plt.close()
 				except Exception as e:
 					print(f"Enhanced visualization error: {e}")
 					import traceback
@@ -1154,4 +1167,16 @@ class TestPolicyTraining(unittest.TestCase):
 			self.assertTrue(torch.all(time_encoding[1:] > time_encoding[:-1]))
 
 if __name__ == '__main__':
-	unittest.main()
+	# Add argument parsing
+	parser = argparse.ArgumentParser(description='Run unit tests for the diffusion policy project.')
+	parser.add_argument('--display-plots', action='store_true',
+						help='Display plots during tests (default: False)')
+	
+	args = parser.parse_args()
+	
+	# Pass the display_plots setting to the global scope
+	# so tests can access it
+	globals()['DISPLAY_PLOTS'] = args.display_plots
+	
+	# Run the tests
+	unittest.main(argv=['first-arg-is-ignored'])
