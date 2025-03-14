@@ -74,7 +74,7 @@ class TestNormalization(unittest.TestCase):
 		actions = torch.tensor([[100.0, 200.0], [300.0, 400.0]], dtype=torch.float32)
 		normalized = self.normalize.normalize_action(actions)
 		unnormalized = self.normalize.unnormalize_action(normalized)
-		self.assertTrue(torch.allclose(actions, unnormalized, atol=1e-5))
+		self.assertTrue(torch.allclose(actions, unnormalized, atol=UNIT_TEST_TOL))
 
 		# Test normalized values are in [-1, 1] range
 		self.assertTrue(torch.all(normalized >= -1.0))
@@ -102,7 +102,7 @@ class TestNormalization(unittest.TestCase):
 		normalized = self.normalize.normalize_action(beyond_action)
 		self.assertTrue(torch.all(normalized > 1.0))
 		unnormalized = self.normalize.unnormalize_action(normalized)
-		self.assertTrue(torch.allclose(beyond_action, unnormalized, atol=1e-5))
+		self.assertTrue(torch.allclose(beyond_action, unnormalized, atol=UNIT_TEST_TOL))
 
 class TestDiffusionPolicyComponents(unittest.TestCase):
 	"""Tests for individual network components."""
@@ -291,7 +291,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 
 				# Round-trip test
 				unnormalized_states = dataset.normalize.unnormalize_condition(normalized_states)
-				self.assertTrue(torch.allclose(unnormalized_states, raw_states_tensor, atol=1e-5),
+				self.assertTrue(torch.allclose(unnormalized_states, raw_states_tensor, atol=UNIT_TEST_TOL),
 							   "Normalization round-trip failed for states")
 
 				# Get actions
@@ -310,7 +310,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 
 					# Round-trip verification
 					unnormalized_actions = dataset.normalize.unnormalize_action(normalized_actions)
-					self.assertTrue(torch.allclose(unnormalized_actions, raw_actions_tensor, atol=1e-5),
+					self.assertTrue(torch.allclose(unnormalized_actions, raw_actions_tensor, atol=UNIT_TEST_TOL),
 								  "Normalization round-trip failed for actions")
 
 					# Find a similar sample in the dataset
@@ -324,7 +324,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 							sample_action = sample_data["action"]
 							
 							# Check if states are similar (allowing for different normalization)
-							if torch.norm(sample_cond - normalized_states) < 0.1:
+							if torch.norm(sample_cond - normalized_states) < UNIT_TEST_TOL:
 								print(f"Found potentially matching sample at index {idx}")
 								found_match = True
 								break
@@ -755,7 +755,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 					# Compute similarity between this sample and our reference
 					obs_similarity = torch.norm(sample_obs - normalized_ref_obs)
 					
-					if obs_similarity < 0.1:
+					if obs_similarity < UNIT_TEST_TOL:
 						# We found a close observation match, now check actions
 						action_similarity = torch.norm(sample_actions - normalized_ref_actions)
 						total_similarity = obs_similarity + 0.1 * action_similarity
@@ -766,7 +766,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 							found_match = True
 							
 							# If we have a very good match, break early
-							if total_similarity < 0.05:
+							if total_similarity < UNIT_TEST_TOL:
 								break
 						
 				except Exception as e:
@@ -787,7 +787,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				# Test 1: Verify observations match the expected frames
 				# The observation at t-1 and t should match our reference
 				sample_obs = matched_sample["agent_pos"]
-				self.assertLess(torch.norm(sample_obs - normalized_ref_obs), 0.2,
+				self.assertLess(torch.norm(sample_obs - normalized_ref_obs), UNIT_TEST_TOL,
 							  "Observations should closely match reference")
 				
 				# Test 2: Verify the predicted action sequence matches expected raw data
@@ -799,7 +799,7 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				# Allow some tolerance since there might be minor differences due to
 				# normalization or different episodes with similar patterns
 				action_diff = torch.norm(sample_actions - normalized_ref_actions)
-				self.assertLessEqual(action_diff / pred_horizon, 0.5,
+				self.assertLessEqual(action_diff / pred_horizon, UNIT_TEST_TOL,
 								   f"Per-step action difference ({action_diff/pred_horizon:.4f}) exceeds tolerance")
 				
 				# Test 3: Verify execution window has the expected actions
@@ -828,17 +828,6 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				print("  ...")
 				for i, act in enumerate(ref_executed[-3:]):
 					print(f"  t{i+action_horizon-3}: {act}")
-				
-				# Create visual diagram of temporal structure
-				print("\nTemporal Structure Diagram:")
-				print("Time:  t-1   t    t+1  ...  t+7  ...  t+14")
-				print("      +-----+-----+-----+---+-----+---+-----+")
-				print("Obs:  |  o  |  o  |     |   |     |   |     |")
-				print("      +-----+-----+-----+---+-----+---+-----+")
-				print("Exec: |     |  a  |  a  |...|  a  |   |     |")
-				print("      +-----+-----+-----+---+-----+---+-----+")
-				print("Pred: |  p  |  p  |  p  |...|  p  |...|  p  |")
-				print("      +-----+-----+-----+---+-----+---+-----+")
 				
 				 # Enhanced comparison display section
 				print("\n═════════════════════════════════════════════")
@@ -935,22 +924,31 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				action_error = torch.norm(ref_actions_tensor - unnorm_sample_actions)
 				exec_error = torch.norm(ref_executed - executed_actions)
 				
-				stats_headers = ["Metric", "Value", "Per-Element", "Interpretation"]
+				# Compute per-element errors
+				obs_per_element = obs_error/obs_horizon/2
+				action_per_element = action_error/pred_horizon/2
+				exec_per_element = exec_error/action_horizon/2
+				
+				# Determine pass/fail status for each metric
+				obs_status = "PASS" if obs_per_element < UNIT_TEST_TOL else "FAIL"
+				action_status = "PASS" if action_per_element < UNIT_TEST_TOL else "FAIL"
+				exec_status = "PASS" if exec_per_element < UNIT_TEST_TOL else "FAIL"
+				
+				stats_headers = ["Metric", "Value", "Per-Element", "Status"]
 				stats_data = [
-					["Observation Error", f"{obs_error:.4f}", f"{obs_error/obs_horizon/2:.4f}", 
-					 "Excellent" if obs_error/obs_horizon/2 < 0.01 else 
-					 "Good" if obs_error/obs_horizon/2 < 0.05 else "Fair"],
-					["Action Sequence Error", f"{action_error:.4f}", f"{action_error/pred_horizon/2:.4f}", 
-					 "Excellent" if action_error/pred_horizon/2 < 0.01 else 
-					 "Good" if action_error/pred_horizon/2 < 0.05 else "Fair"],
-					["Execution Window Error", f"{exec_error:.4f}", f"{exec_error/action_horizon/2:.4f}", 
-					 "Excellent" if exec_error/action_horizon/2 < 0.01 else 
-					 "Good" if exec_error/action_horizon/2 < 0.05 else "Fair"]
+					["Observation Error", f"{obs_error:.4f}", f"{obs_per_element:.4f}", obs_status],
+					["Action Sequence Error", f"{action_error:.4f}", f"{action_per_element:.4f}", action_status],
+					["Execution Window Error", f"{exec_error:.4f}", f"{exec_per_element:.4f}", exec_status]
 				]
 				
 				print(tabulate(stats_data, headers=stats_headers, tablefmt="pretty"))
 				print()
 				
+				# Fail the test if any metric fails
+				self.assertTrue(obs_status == "PASS", f"Observation error too high: {obs_per_element:.4f} > {UNIT_TEST_TOL}")
+				self.assertTrue(action_status == "PASS", f"Action sequence error too high: {action_per_element:.4f} > {UNIT_TEST_TOL}")
+				self.assertTrue(exec_status == "PASS", f"Execution window error too high: {exec_per_element:.4f} > {UNIT_TEST_TOL}")
+
 				# 5. Enhanced visual diagram of temporal structure
 				print("\nTEMPORAL STRUCTURE DIAGRAM:")
 				print("Time:  t-1   t    t+1  ...  t+7  ...  t+14")

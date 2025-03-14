@@ -95,6 +95,8 @@ DO_SQRT_ALPHA_BAR_WEIGHTING = False
 DATASET_TYPE = "lerobot"      # Options: "custom", "lerobot"
 LE_ROBOT_GYM_ENV_NAME = "gym_pusht/PushT-v0"
 
+UNIT_TEST_TOL = 1e-5
+
 def print_settings():
 	"""
 	Print the current configuration settings.
