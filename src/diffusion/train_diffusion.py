@@ -37,6 +37,7 @@ from src.utils.video_utils import save_video  # Import the new video utility
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.seed import set_seed
+from src.datasets.policy_dataset import PolicyDataset
 set_seed(42)
 
 def get_chunk_time_encoding(length: int):
@@ -45,152 +46,6 @@ def get_chunk_time_encoding(length: int):
 	This is used to embed each timestep within a chunk.
 	"""
 	return torch.linspace(0, 1, steps=length)
-
-class PolicyDataset(Dataset):
-	"""
-	PolicyDataset loads training samples for the diffusion policy.
-
-	For LeRobot, it loads the Hugging Face dataset "lerobot/pusht_image",
-	groups frames by episode, and constructs examples with:
-	  - observation.state: two states (t-1 and t)
-	  - observation.image: two images (t-1 and t)
-	  - action: sequence of actions from t-1 to WINDOW_SIZE.
-
-	For custom data, the dataset follows a similar structure.
-	"""
-	def __init__(self, data_dir):
-		print_settings()
-		self.samples = []
-		self._chunked_samples = []
-		
-		# Create output directory
-		os.makedirs(os.path.join(OUTPUT_DIR, DATA_SOURCE_DIR), exist_ok=True)
-		
-		if DATASET_TYPE == "lerobot":
-			self.data_source = "lerobot"
-			hf_dataset = load_dataset("lerobot/pusht_image", split="train")
-			print(f'Loaded {len(hf_dataset)} samples from LeRobot dataset.')
-			episodes = {}
-			for sample in hf_dataset:
-				ep = sample["episode_index"]
-				episodes.setdefault(ep, []).append(sample)
-			for ep, ep_samples in episodes.items():
-				ep_samples = sorted(ep_samples, key=lambda s: s["frame_index"])
-				if len(ep_samples) < WINDOW_SIZE + 2:
-					continue
-				for i in range(1, len(ep_samples) - WINDOW_SIZE):
-					obs = {
-						"state": [
-							ep_samples[i-1]["observation.state"],
-							ep_samples[i]["observation.state"]
-						],
-						"image": [
-							ep_samples[i-1]["observation.image"],
-							ep_samples[i]["observation.image"]
-						]
-					}
-					actions = []
-					for j in range(i - 1,  WINDOW_SIZE):
-						actions.append(ep_samples[j]["action"])
-					new_sample = {
-						"observation": obs,
-						"action": actions,
-						"time_index": list(range(WINDOW_SIZE))
-					}
-					self._chunked_samples.append(new_sample)
-		else:
-			self.data_source = "custom"
-			episodes = {}
-			for filename in os.listdir(data_dir):
-				if filename.endswith('.json'):
-					filepath = os.path.join(data_dir, filename)
-					with open(filepath, 'r') as f:
-						data = json.load(f)
-						for sample in data:
-							ep = sample["episode_index"]
-							episodes.setdefault(ep, []).append(sample)
-			print(f'Loaded {len(episodes)} episodes from custom dataset.')
-			for ep, ep_samples in episodes.items():
-				ep_samples = sorted(ep_samples, key=lambda s: s["frame_index"])
-				if len(ep_samples) < WINDOW_SIZE + 2:
-					continue
-				for i in range(1, len(ep_samples) - WINDOW_SIZE):
-					obs = {
-						"state": [
-							ep_samples[i-1]["observation.state"],
-							ep_samples[i]["observation.state"]
-						],
-						"image": [
-							ep_samples[i-1]["observation.image"],
-							ep_samples[i]["observation.image"]
-						]
-					}
-					actions = []
-					for j in range(i - 1, WINDOW_SIZE):
-						actions.append(ep_samples[j]["action"])
-					new_sample = {
-						"observation": obs,
-						"action": actions,
-						"time_index": list(range(WINDOW_SIZE))
-					}
-					self._chunked_samples.append(new_sample)
-		stats_dir = os.path.join(OUTPUT_DIR, DATA_SOURCE_DIR, self.data_source)
-		os.makedirs(stats_dir, exist_ok=True)
-		stats_path = os.path.join(stats_dir, NORM_STATS_FILENAME)
-		self.normalize = Normalize.compute_from_limits()
-		self.normalize.save(stats_path)
-
-	def __len__(self):
-		return len(self._chunked_samples)
-
-	def __getitem__(self, idx):
-		sample = self._chunked_samples[idx]
-		obs = sample["observation"]
-		if "state" not in obs:
-			raise KeyError("Sample must contain observation['state']")
-		state_raw = torch.tensor(obs["state"], dtype=torch.float32)
-		state_flat = state_raw.flatten()
-		condition = self.normalize.normalize_condition(state_flat)
-		if self.data_source == "lerobot":
-			image_array0 = obs["image"][0]
-			image_array1 = obs["image"][1]
-			if not isinstance(image_array0, np.ndarray):
-				image_array0 = np.array(image_array0, dtype=np.uint8)
-			if not isinstance(image_array1, np.ndarray):
-				image_array1 = np.array(image_array1, dtype=np.uint8)
-			image0 = Image.fromarray(image_array0)
-			image1 = Image.fromarray(image_array1)
-			image0 = image_transform(image0)
-			image1 = image_transform(image1)
-			image = [image0, image1]
-		else:
-			image_files = obs["image"]
-			if len(image_files) > 1:
-				img_path0 = os.path.join(OUTPUT_DIR, DATA_SOURCE_DIR, self.data_source, TRAINING_DATA_DIR, "images", image_files[0])
-				img_path1 = os.path.join(OUTPUT_DIR, DATA_SOURCE_DIR, self.data_source, TRAINING_DATA_DIR, "images", image_files[1])
-			else:
-				img_path0 = os.path.join(OUTPUT_DIR, DATA_SOURCE_DIR, self.data_source, TRAINING_DATA_DIR, "images", image_files[0])
-				img_path1 = img_path0
-			if os.path.exists(img_path0) and os.path.exists(img_path1):
-				image0 = Image.open(img_path0).convert("RGB")
-				image1 = Image.open(img_path1).convert("RGB")
-				image0 = image_transform(image0)
-				image1 = image_transform(image1)
-				image = [image0, image1]
-			else:
-				raise FileNotFoundError("Image file not found.")
-		if "action" not in sample:
-			raise KeyError("Sample does not contain 'action'")
-		action_data = sample["action"]
-		if isinstance(action_data[0], (list, tuple)):
-			action = torch.tensor(action_data, dtype=torch.float32)
-		else:
-			action = torch.tensor(action_data, dtype=torch.float32).unsqueeze(0)
-		action = self.normalize.normalize_action(action)
-		time_index = torch.tensor(sample["time_index"], dtype=torch.float32)
-		max_t = float(time_index[-1])
-		time_seq = time_index / max_t
-		return condition, image, action, time_seq
 
 def validate_policy(model, device, save_locally=False, local_save_path=None):
 	"""
@@ -377,8 +232,14 @@ def compare_to_training_data(model, device):
 	try:
 		print("Comparing policy predictions to training data...")
 
-		# Load training dataset
-		dataset = PolicyDataset(TRAINING_DATA_DIR)
+		# Load training dataset with all required parameters
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=WINDOW_SIZE,
+			action_horizon=WINDOW_SIZE//2,
+			obs_horizon=2
+		)
 
 		 # Initialize lists to store all ground truth and predicted actions, and inference points
 		all_pred_actions = []
@@ -894,8 +755,14 @@ def train():
 	# Enable benchmark mode for optimized performance on fixed-size inputs.
 	torch.backends.cudnn.benchmark = True
 
-	# Load data.
-	dataset = PolicyDataset(TRAINING_DATA_DIR)
+	# Load data with all required parameters
+	dataset = PolicyDataset(
+		dataset_type="lerobot",
+		data_dir=TRAINING_DATA_DIR,
+		pred_horizon=WINDOW_SIZE,
+		action_horizon=WINDOW_SIZE//2,
+		obs_horizon=2
+	)
 	dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=os.cpu_count()-1, pin_memory=True)
 
 	print("len dataloader", len(dataloader))

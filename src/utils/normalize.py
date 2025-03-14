@@ -5,6 +5,7 @@ import os
 import pandas as pd
 from tabulate import tabulate
 import numpy as np
+from einops import rearrange
 from src.config import *
 
 class Normalize:
@@ -53,9 +54,9 @@ class Normalize:
 		# For X,Y coordinates in condition (matching action limits)
 		# TODO(mrahme): once goal conditioning is added, I'll
 		# need to add a total of 6 dims for t-1 and t [x, y, theta].
-		condition_min = torch.tensor([0.0, 0.0, 0.0, 0.0], 
+		condition_min = torch.tensor([0.0, 0.0], 
 									 dtype=torch.float32, device=device)
-		condition_max = torch.tensor([ACTION_LIM, ACTION_LIM, ACTION_LIM, ACTION_LIM], 
+		condition_max = torch.tensor([ACTION_LIM, ACTION_LIM], 
 									 dtype=torch.float32, device=device)
 
 		# The action normalization
@@ -67,58 +68,145 @@ class Normalize:
 	def normalize_condition(self, condition: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 		"""
 		Normalize a condition tensor using min-max normalization.
+		Works with both 1D tensors [a,] and 2D tensors [a,b].
+		Also supports inputs where the last dimension is a multiple of the condition dimension
+		(e.g., concatenated state vectors).
 
 		Args:
-			condition (Tensor): Condition tensor.
+			condition (Tensor): Condition tensor, either 1D or 2D.
 			eps (float): Epsilon to avoid division by zero.
 
 		Returns:
-			Tensor: Normalized condition.
+			Tensor: Normalized condition with same dimensionality as input.
 		"""
-		# Normalize from [condition_min, condition_max] to [-1, 1]
-		return 2.0 * ((condition - self.condition_min) / (self.condition_max - self.condition_min + eps)) - 1.0
-	
+		# Save original shape for restoration later
+		original_dim = condition.dim()
+		original_size = condition.shape[-1] if original_dim > 0 else 0
+		
+		# Ensure condition is 2D for uniform processing
+		if original_dim == 1:
+			condition = rearrange(condition, 'd -> 1 d')  # Add batch dimension [d] -> [1, d]
+		
+		 # Handle case where the last dimension is a multiple of condition_min's size
+		condition_dim = self.condition_min.shape[0]
+		
+		if condition.shape[-1] % condition_dim == 0:
+			# Number of repeats needed
+			repeat_factor = condition.shape[-1] // condition_dim
+			
+			# Repeat the min and max tensors to match the input dimension
+			condition_min_expanded = self.condition_min.repeat(repeat_factor)
+			condition_max_expanded = self.condition_max.repeat(repeat_factor)
+			
+			# Normalize from [condition_min, condition_max] to [-1, 1]
+			normalized = 2.0 * ((condition - condition_min_expanded) / (condition_max_expanded - condition_min_expanded + eps)) - 1.0
+		else:
+			# Original normalization logic for exact dimension match
+			normalized = 2.0 * ((condition - self.condition_min) / (self.condition_max - self.condition_min + eps)) - 1.0
+		
+		# Restore original shape if needed
+		if original_dim == 1:
+			normalized = rearrange(normalized, '1 d -> d')  # Remove batch dimension [1, d] -> [d]
+			
+		return normalized
+
 	def unnormalize_condition(self, condition: torch.Tensor) -> torch.Tensor:
 		"""
-		Revert normalization on an condition tensor.
+		Revert normalization on a condition tensor.
+		Works with both 1D tensors [a,] and 2D tensors [a,b].
+		Also supports inputs where the last dimension is a multiple of the condition dimension.
 
 		Args:
-			action (Tensor): Normalized condition tensor.
-			eps (float): Epsilon to avoid division by zero.
+			condition (Tensor): Normalized condition tensor, either 1D or 2D.
 
 		Returns:
-			Tensor: Original condition tensor.
+			Tensor: Original condition tensor with same dimensionality as input.
 		"""
-		# Un-normalize from [-1, 1] to [action_min, action_max]
-		return ((condition + 1.0) / 2.0) * (self.condition_max - self.condition_min) + self.condition_min
-	
+		# Save original shape for restoration later
+		original_dim = condition.dim()
+		original_size = condition.shape[-1] if original_dim > 0 else 0
+		
+		# Ensure condition is 2D for uniform processing
+		if original_dim == 1:
+			condition = rearrange(condition, 'd -> 1 d')  # Add batch dimension [d] -> [1, d]
+		
+		# Handle case where the last dimension is a multiple of condition_min's size
+		condition_dim = self.condition_min.shape[0]
+		
+		if condition.shape[-1] % condition_dim == 0:
+			# Number of repeats needed
+			repeat_factor = condition.shape[-1] // condition_dim
+			
+			# Repeat the min and max tensors to match the input dimension
+			condition_min_expanded = self.condition_min.repeat(repeat_factor)
+			condition_max_expanded = self.condition_max.repeat(repeat_factor)
+			
+			# Un-normalize from [-1, 1] to [condition_min, condition_max]
+			unnormalized = ((condition + 1.0) / 2.0) * (condition_max_expanded - condition_min_expanded) + condition_min_expanded
+		else:
+			# Original unnormalization logic for exact dimension match
+			unnormalized = ((condition + 1.0) / 2.0) * (self.condition_max - self.condition_min) + self.condition_min
+		
+		# Restore original shape if needed
+		if original_dim == 1:
+			unnormalized = rearrange(unnormalized, '1 d -> d')  # Remove batch dimension [1, d] -> [d]
+			
+		return unnormalized
+
 	def normalize_action(self, action: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
 		"""
-		Normalize an action tensor using min–max normalization.
+		Normalize an action tensor using min-max normalization.
+		Works with both 1D tensors [a,] and 2D tensors [a,b].
 
 		Args:
-			action (Tensor): Raw action tensor.
+			action (Tensor): Raw action tensor, either 1D or 2D.
 			eps (float): Epsilon to avoid division by zero.
 
 		Returns:
-			Tensor: Normalized action.
+			Tensor: Normalized action with same dimensionality as input.
 		"""
+		# Save original shape for restoration later
+		original_dim = action.dim()
+		
+		# Ensure action is 2D for uniform processing
+		if original_dim == 1:
+			action = rearrange(action, 'd -> 1 d')  # Add batch dimension [d] -> [1, d]
+		
 		# Normalize from [action_min, action_max] to [-1, 1]
-		return 2.0 * ((action - self.action_min) / (self.action_max - self.action_min + eps)) - 1.0
-	
+		normalized = 2.0 * ((action - self.action_min) / (self.action_max - self.action_min + eps)) - 1.0
+		
+		# Restore original shape if needed
+		if original_dim == 1:
+			normalized = rearrange(normalized, '1 d -> d')  # Remove batch dimension [1, d] -> [d]
+			
+		return normalized
+
 	def unnormalize_action(self, action: torch.Tensor) -> torch.Tensor:
 		"""
 		Revert normalization on an action tensor.
+		Works with both 1D tensors [a,] and 2D tensors [a,b].
 
 		Args:
-			action (Tensor): Normalized action tensor.
-			eps (float): Epsilon to avoid division by zero.
+			action (Tensor): Normalized action tensor, either 1D or 2D.
 
 		Returns:
-			Tensor: Original action tensor.
+			Tensor: Original action tensor with same dimensionality as input.
 		"""
+		# Save original shape for restoration later
+		original_dim = action.dim()
+		
+		# Ensure action is 2D for uniform processing
+		if original_dim == 1:
+			action = rearrange(action, 'd -> 1 d')  # Add batch dimension [d] -> [1, d]
+		
 		# Un-normalize from [-1, 1] to [action_min, action_max]
-		return ((action + 1.0) / 2.0) * (self.action_max - self.action_min) + self.action_min
+		unnormalized = ((action + 1.0) / 2.0) * (self.action_max - self.action_min) + self.action_min
+		
+		# Restore original shape if needed
+		if original_dim == 1:
+			unnormalized = rearrange(unnormalized, '1 d -> d')  # Remove batch dimension [1, d] -> [d]
+			
+		return unnormalized
 	
 	def to_dict(self) -> dict:
 		"""

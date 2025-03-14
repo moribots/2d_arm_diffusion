@@ -20,6 +20,7 @@ from src.diffusion.diffusion_policy import DiffusionPolicy, UNet1D, ResidualBloc
 from src.diffusion.policy_inference import DiffusionPolicyInference
 from src.diffusion.train_diffusion import PolicyDataset, get_chunk_time_encoding
 from src.utils.normalize import Normalize
+from src.datasets.policy_dataset import PolicyDataset
 from src.utils.utils import *
 import torch.nn.functional as F
 import plotly.express as px
@@ -66,35 +67,35 @@ class TestNormalization(unittest.TestCase):
 	"""Tests for normalization functions."""
 	def setUp(self):
 		self.normalize = Normalize.compute_from_limits()
-		
+
 	def test_normalize_unnormalize_roundtrip(self):
 		# Test roundtrip on actions
 		actions = torch.tensor([[100.0, 200.0], [300.0, 400.0]], dtype=torch.float32)
 		normalized = self.normalize.normalize_action(actions)
 		unnormalized = self.normalize.unnormalize_action(normalized)
 		self.assertTrue(torch.allclose(actions, unnormalized, atol=1e-5))
-		
+
 		# Test normalized values are in [-1, 1] range
 		self.assertTrue(torch.all(normalized >= -1.0))
 		self.assertTrue(torch.all(normalized <= 1.0))
-		
+
 		# Test conditions
-		condition = torch.tensor([50.0, 100.0, 150.0, 200.0], dtype=torch.float32)
+		condition = torch.tensor([50.0, 100.0], dtype=torch.float32)
 		normalized_cond = self.normalize.normalize_condition(condition)
 		self.assertTrue(torch.all(normalized_cond >= -1.0))
 		self.assertTrue(torch.all(normalized_cond <= 1.0))
-		
+
 	def test_edge_cases(self):
 		# Test min values
 		min_action = torch.zeros(2, dtype=torch.float32)
 		normalized = self.normalize.normalize_action(min_action)
 		self.assertTrue(torch.allclose(normalized, torch.tensor([-1.0, -1.0], dtype=torch.float32)))
-		
+
 		# Test max values
 		max_action = torch.tensor([ACTION_LIM, ACTION_LIM], dtype=torch.float32)
 		normalized = self.normalize.normalize_action(max_action)
 		self.assertTrue(torch.allclose(normalized, torch.tensor([1.0, 1.0], dtype=torch.float32)))
-		
+
 		# Test beyond range
 		beyond_action = torch.tensor([ACTION_LIM * 1.5, ACTION_LIM * 1.5], dtype=torch.float32)
 		normalized = self.normalize.normalize_action(beyond_action)
@@ -115,7 +116,7 @@ class TestDiffusionPolicyComponents(unittest.TestCase):
 		bias = film.fc(cond).unsqueeze(-1)
 		expected = x + bias
 		self.assertTrue(torch.allclose(out, expected))
-		
+
 	def test_ResidualBlock1D(self):
 		batch, in_channels, T_dim = 2, 8, 10
 		out_channels = 16
@@ -130,7 +131,7 @@ class TestDiffusionPolicyComponents(unittest.TestCase):
 		out_same = block_same(x, cond)
 		self.assertEqual(out_same.shape, (batch, in_channels, T_dim))
 		self.assertIsInstance(block_same.res_conv, torch.nn.Identity)
-		
+
 	def test_UNet1D(self):
 		batch = 2
 		window_size = WINDOW_SIZE
@@ -148,6 +149,36 @@ class TestDiffusionPolicyComponents(unittest.TestCase):
 		x_reshaped = x_irreg.transpose(1, 2)
 		self.assertEqual(x_reshaped.shape, (batch, action_dim, irregular_window_size))
 
+	def test_model_temporal_processing(self):
+		"""Tests that the UNet1D model correctly processes temporal sequences of varying lengths."""
+		batch = 2
+		window_size = WINDOW_SIZE
+		action_dim = ACTION_DIM
+		global_cond_dim = CONDITION_DIM + 128
+		
+		# Create a UNet with specific window size
+		unet = UNet1D(action_dim, global_cond_dim, hidden_dim=64)
+		
+		# Test with standard window size
+		x = torch.randn(batch, window_size, action_dim)
+		cond = torch.randn(batch, global_cond_dim)
+		out = unet(x, cond)
+		self.assertEqual(out.shape, (batch, window_size, action_dim),
+						 f"Expected output shape (batch, window_size, action_dim), got {out.shape}")
+		
+		# Test with variable sequence lengths:
+		# 1. Shorter sequence (half window size)
+		x_short = torch.randn(batch, window_size//2, action_dim)
+		out_short = unet(x_short, cond)
+		self.assertEqual(out_short.shape, (batch, window_size//2, action_dim),
+						 "UNet should handle shorter sequences properly")
+		
+		# 2. Longer sequence (double window size)
+		x_long = torch.randn(batch, window_size*2, action_dim)
+		out_long = unet(x_long, cond)
+		self.assertEqual(out_long.shape, (batch, window_size*2, action_dim),
+						 "UNet should handle longer sequences properly")
+
 class TestDiffusionPolicy(unittest.TestCase):
 	"""Test the full diffusion policy network."""
 	def test_forward_output_shape(self):
@@ -160,7 +191,7 @@ class TestDiffusionPolicy(unittest.TestCase):
 		image = [torch.randn(batch, 3, IMG_RES, IMG_RES), torch.randn(batch, 3, IMG_RES, IMG_RES)]
 		out = model(x, t, state, image)
 		self.assertEqual(out.shape, (batch, window_size, ACTION_DIM))
-		
+
 	def test_gradient_flow(self):
 		batch = 2
 		window_size = WINDOW_SIZE
@@ -179,71 +210,70 @@ class TestDiffusionPolicy(unittest.TestCase):
 class TestPolicyDatasetLerobot(unittest.TestCase):
 	"""Tests for the PolicyDataset using the real lerobot dataset."""
 	def test_dataset_loading_and_structure(self):
-		dataset = PolicyDataset("lerobot")
-		
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=WINDOW_SIZE,
+			action_horizon=WINDOW_SIZE//2,
+			obs_horizon=2
+		)
+
 		self.assertGreater(len(dataset), 0, "Dataset should contain at least one sample")
-		
+
 		# Get the first sample safely with error handling
 		try:
 			sample = dataset[0]
 			print(f"Successfully loaded sample 0. Type: {type(sample)}")
 		except Exception as e:
 			self.fail(f"Failed to load the first sample with error: {str(e)}")
-			
-		self.assertEqual(len(sample), 4, "Sample should contain condition, image, action, and time_seq")
-		condition, image, action, time_seq = sample
-		
+
+		self.assertEqual(len(sample), 3, "Sample should contain condition, image, action")
+		condition = sample["agent_pos"]
+		image = sample["image"]
+		action = sample["action"]
+
 		# Check condition: since two state observations are concatenated, expect shape (4,)
 		self.assertEqual(condition.shape, (4,))
-		
-		# Check images: should be a list of two tensors each with shape (3, IMG_RES, IMG_RES)
-		self.assertIsInstance(image, list)
-		self.assertEqual(len(image), 2)
-		self.assertEqual(image[0].shape, (3, IMG_RES, IMG_RES))
-		self.assertEqual(image[1].shape, (3, IMG_RES, IMG_RES))
-		
+
+		# Check images: should be a tensor with shape (obs_horizon, 3, IMG_RES, IMG_RES)
+		self.assertIsInstance(image, torch.Tensor)
+		self.assertEqual(image.shape, (2, 3, IMG_RES, IMG_RES))  # obs_horizon is 2
+
 		# Check action: should be a tensor with shape (WINDOW_SIZE, ACTION_DIM)
 		self.assertEqual(action.shape[1], ACTION_DIM)
 		self.assertEqual(action.shape[0], WINDOW_SIZE)
-		
-		# Check time_seq: should be a tensor of shape (WINDOW_SIZE,) with values from 0 to 1
-		self.assertEqual(time_seq.shape[0], WINDOW_SIZE)
-		self.assertAlmostEqual(time_seq[0].item(), 0.0, places=5)
-		self.assertAlmostEqual(time_seq[-1].item(), 1.0, places=5)
-		# Verify monotonicity
-		self.assertTrue(torch.all(time_seq[1:] > time_seq[:-1]), "Time sequence should be strictly increasing")
-		
+
 		 # Verify dataset fidelity against raw LeRobot data
 		try:
 			from datasets import load_dataset
-			
+
 			print("\nVerifying dataset against raw LeRobot data...")
 			raw_dataset = load_dataset("lerobot/pusht_image", split="train[:50]")
 			print(f"Loaded {len(raw_dataset)} samples from raw LeRobot dataset")
-			
+
 			# Find an episode with enough frames
 			episodes = {}
 			for sample in raw_dataset:
 				ep = sample["episode_index"]
 				episodes.setdefault(ep, []).append(sample)
-				
+
 			test_episode = None
 			for ep, frames in episodes.items():
 				if len(frames) >= WINDOW_SIZE + 2:
 					test_episode = ep
 					break
-					
+
 			self.assertIsNotNone(test_episode, "Could not find an episode with sufficient frames")
-			
+
 			# Get frames from test episode in order
 			ep_frames = sorted([f for f in raw_dataset if f["episode_index"] == test_episode],
 							  key=lambda x: x["frame_index"])
-							  
+
 			print(f"Testing with episode {test_episode}, which has {len(ep_frames)} frames")
-			
+
 			# Test frame with context
 			i = 1  # Second frame
-			
+
 			# Get raw data and verify normalization
 			if i > 0 and i + WINDOW_SIZE <= len(ep_frames):
 				# Get states
@@ -253,41 +283,45 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				]
 				raw_states_flat = np.concatenate([raw_states[0], raw_states[1]])
 				raw_states_tensor = torch.tensor(raw_states_flat, dtype=torch.float32)
-				
+
 				# Normalize and verify
 				normalized_states = dataset.normalize.normalize_condition(raw_states_tensor)
 				self.assertEqual(normalized_states.shape, (4,), "Normalized state shape incorrect")
-				
+
 				# Round-trip test
 				unnormalized_states = dataset.normalize.unnormalize_condition(normalized_states)
 				self.assertTrue(torch.allclose(unnormalized_states, raw_states_tensor, atol=1e-5),
 							   "Normalization round-trip failed for states")
-							   
+
 				# Get actions
 				raw_actions = []
 				for j in range(i-1, i+WINDOW_SIZE-1):
 					if j < len(ep_frames):
 						raw_actions.append(ep_frames[j]["action"])
-				
+
 				if len(raw_actions) == WINDOW_SIZE:
 					raw_actions_tensor = torch.tensor(raw_actions, dtype=torch.float32)
 					normalized_actions = dataset.normalize.normalize_action(raw_actions_tensor)
-					
+
 					# Verify shape
 					self.assertEqual(normalized_actions.shape, (WINDOW_SIZE, ACTION_DIM),
 								   f"Normalized actions should have shape ({WINDOW_SIZE}, {ACTION_DIM})")
-					
+
 					# Round-trip verification
 					unnormalized_actions = dataset.normalize.unnormalize_action(normalized_actions)
 					self.assertTrue(torch.allclose(unnormalized_actions, raw_actions_tensor, atol=1e-5),
 								  "Normalization round-trip failed for actions")
-								  
+
 					# Find a similar sample in the dataset
 					# Sample several from the dataset to see if we can find a match
 					found_match = False
 					for idx in range(min(100, len(dataset))):
 						try:
-							sample_cond, _, sample_action, _ = dataset[idx]
+							# Fix: Get dictionary instead of unpacking a tuple
+							sample_data = dataset[idx]
+							sample_cond = sample_data["agent_pos"]
+							sample_action = sample_data["action"]
+							
 							# Check if states are similar (allowing for different normalization)
 							if torch.norm(sample_cond - normalized_states) < 0.1:
 								print(f"Found potentially matching sample at index {idx}")
@@ -295,41 +329,45 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 								break
 						except Exception as e:
 							print(f"Error checking sample {idx}: {e}")
-							
+
 					print(f"Found at least one similar sample in dataset: {found_match}")
-					
+
 				print("Verified dataset normalization and structure match raw data expectations")
 		except Exception as e:
 			print(f"Error during raw data verification: {e}")
 			import traceback
 			traceback.print_exc()
 			self.fail(f"Failed test")
-		
+
 		# Pretty print some samples for visualization
 		print("\n===== Dataset Sample Visualization =====")
-		
+
 		# Debug the dataset structure before attempting to visualize random samples
 		print(f"Dataset type: {type(dataset)}")
 		print(f"Dataset length: {len(dataset)}")
-		
+
 		# Instead of random samples, use specific indices to avoid potential issues
 		# with invalid indices in case the dataset has gaps
 		safe_indices = [0]  # Start with the first sample that we know works
-		
+
 		# Try to add one more index if the dataset has at least 2 items
 		if len(dataset) > 1:
 			safe_indices.append(1)
-		
+
 		for idx in safe_indices:
 			try:
 				print(f"\nAttempting to load sample {idx}...")
+				
+				# Fix: Get dictionary instead of unpacking a tuple
 				sample_data = dataset[idx]
-				if not isinstance(sample_data, tuple) or len(sample_data) != 4:
+				if not isinstance(sample_data, dict) or len(sample_data) != 3:
 					print(f"Warning: Sample {idx} has unexpected format: {type(sample_data)}, length: {len(sample_data) if hasattr(sample_data, '__len__') else 'N/A'}")
 					continue
-					
-				condition, image, action, time_seq = sample_data
-				
+
+				condition = sample_data["agent_pos"]
+				image = sample_data["image"]
+				action = sample_data["action"]
+
 				print(f"\n--- Sample {idx} ---")
 				print(f"Condition (state): {condition.numpy()}")
 				print(f"Action sequence shape: {action.shape}")
@@ -340,111 +378,660 @@ class TestPolicyDatasetLerobot(unittest.TestCase):
 				print("  ...")
 				for i in range(max(0, action.shape[0]-3), action.shape[0]):
 					print(f"  Step {i}: {action[i].numpy()}")
-				
-				print(f"Time sequence: {time_seq[:5].numpy()}... to {time_seq[-5:].numpy()}")
-				
+
 				# Convert data to numpy arrays for visualization
 				x_vals = action[:, 0].numpy()
 				y_vals = action[:, 1].numpy()
-				time_vals = time_seq.numpy()
-				
-				 # Debug shapes before plotting
-				print(f"Shapes before plotting - x_vals: {x_vals.shape}, y_vals: {y_vals.shape}, time_vals: {time_vals.shape}")
-				
+
 				# Ensure all arrays have the same length for plotting
-				min_length = min(len(x_vals), len(y_vals), len(time_vals))
+				min_length = min(len(x_vals), len(y_vals))
 				x_vals = x_vals[:min_length]
 				y_vals = y_vals[:min_length]
-				time_vals = time_vals[:min_length]
-				
-				print(f"Adjusted shapes - x_vals: {x_vals.shape}, y_vals: {y_vals.shape}, time_vals: {time_vals.shape}")
-				
+
+				print(f"Adjusted shapes - x_vals: {x_vals.shape}, y_vals: {y_vals.shape}")
+
 				# Convert to matplotlib for visualization instead of interactive plotly
 				plt.figure(figsize=(10, 8))
-				
+
 				# Plot the trajectory with color gradient
 				points = plt.scatter(
-					x_vals, y_vals, 
-					c=time_vals, 
-					cmap='viridis', 
-					s=50, 
+					x_vals, y_vals,
+					cmap='viridis',
+					s=50,
 					alpha=0.8
 				)
 				plt.colorbar(points, label="Time")
-				
+
 				# Connect the points with a line
 				plt.plot(x_vals, y_vals, 'k-', alpha=0.3)
-				
+
 				# Mark start and end points
 				plt.scatter([x_vals[0]], [y_vals[0]], color='green', s=120, marker='o', label="Start")
 				plt.scatter([x_vals[-1]], [y_vals[-1]], color='red', s=120, marker='x', label="End")
-				
+
 				plt.title(f"Action Trajectory (Sample {idx})")
 				plt.xlabel("X coordinate")
 				plt.ylabel("Y coordinate")
 				plt.grid(True)
 				plt.legend()
-				plt.show()
-				
+				plt.show(block=False)  # <-- Changed to non-blocking
+				plt.pause(0.1)  # Small pause to render the plot
+
 				# Display the images using matplotlib - with proper denormalization
 				fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-				
+
 				# Define ImageNet mean and std for denormalization
 				mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
 				std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-				
-				for i, img_tensor in enumerate(image):
+
+				for i in range(image.shape[0]):
+					# Get the individual image tensor
+					img_tensor = image[i]
+					
 					# Print image statistics for debugging
 					print(f"Image {i+1} stats: min={img_tensor.min().item():.4f}, "
 						  f"max={img_tensor.max().item():.4f}, "
 						  f"mean={img_tensor.mean().item():.4f}")
-					
+
 					# First, denormalize if the image was normalized with ImageNet stats
 					img_denorm = img_tensor * std + mean
-					
+
 					# Convert to numpy and ensure correct channel order (C,H,W) -> (H,W,C)
 					img_np = img_denorm.permute(1, 2, 0).numpy()
-					
+
 					# Ensure values are in valid display range [0, 1]
 					img_np = np.clip(img_np, 0, 1)
-					
+
 					# Print numpy array stats for verification
 					print(f"Numpy image {i+1} shape: {img_np.shape}, "
 						  f"min={img_np.min():.4f}, max={img_np.max().item():.4f}")
-					
+
 					# Display the image
 					axes[i].imshow(img_np)
 					axes[i].set_title(f"Image {i+1}")
 					axes[i].axis('off')
-				
+
 				plt.suptitle(f"Input Images (Sample {idx})")
 				plt.tight_layout()
-				plt.show()
-				
+				plt.show(block=False)  # <-- Changed to non-blocking
+				plt.pause(0.1)  # Small pause to render the plot
+
 				# Alternative visualization with pure PIL (just in case)
 				try:
 					plt.figure(figsize=(12, 5))
-					for i, img_tensor in enumerate(image):
+					for i in range(image.shape[0]):
+						# Get the individual image tensor
+						img_tensor = image[i]
+						
 						# Denormalize
 						img_denorm = img_tensor * std + mean
-						
+
 						# Convert to PIL
 						img_pil = transforms.ToPILImage()(img_denorm)
-						
+
 						plt.subplot(1, 2, i+1)
 						plt.imshow(img_pil)
 						plt.title(f"Image {i+1} (PIL)")
 						plt.axis('off')
-					
+
 					plt.tight_layout()
-					plt.show()
+					plt.show(block=False)  # <-- Changed to non-blocking
+					plt.pause(0.1)  # Small pause to render the plot
 				except Exception as e:
 					print(f"PIL visualization failed: {e}")
-				
+
 			except Exception as e:
 				print(f"Error processing sample {idx}: {str(e)}")
 				import traceback
 				traceback.print_exc()
+
+	def test_dataloader_batch_shapes(self):
+		"""Test that batches from the DataLoader have the correct shapes."""
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=WINDOW_SIZE,
+			action_horizon=WINDOW_SIZE//2,
+			obs_horizon=2
+		)
+
+		# Create dataloader with appropriate parameters
+		batch_size = 1  # Using a small batch size for testing
+		dataloader = torch.utils.data.DataLoader(
+			dataset,
+			batch_size=batch_size,
+			num_workers=0,  # Use 0 workers for testing
+			shuffle=True,
+			# accelerate cpu-gpu transfer
+			pin_memory=True,
+			# don't kill worker process after each epoch
+			persistent_workers=False  # False for testing since we use 0 workers
+		)
+
+		# Get a batch and verify shapes
+		try:
+			batch = next(iter(dataloader))
+			
+			# Print and verify shapes
+			print("\n===== DataLoader Batch Shapes =====")
+			print(f"batch['image'].shape: {batch['image'].shape}")
+			print(f"batch['agent_pos'].shape: {batch['agent_pos'].shape}")
+			print(f"batch['action'].shape: {batch['action'].shape}")
+			print("\n-----------------------------------\n")
+			
+			# Assert the correct shapes
+			self.assertEqual(batch['image'].shape, (batch_size, 2, 3, IMG_RES, IMG_RES),
+							f"Expected image shape {(batch_size, 2, 3, IMG_RES, IMG_RES)}, got {batch['image'].shape}")
+			self.assertEqual(batch['agent_pos'].shape, (batch_size, 4),
+							f"Expected agent_pos shape {(batch_size, 4)}, got {batch['agent_pos'].shape}")
+			self.assertEqual(batch['action'].shape, (batch_size, WINDOW_SIZE, ACTION_DIM),
+							f"Expected action shape {(batch_size, WINDOW_SIZE, ACTION_DIM)}, got {batch['action'].shape}")
+			
+			# Verify data types and ranges
+			self.assertTrue(torch.is_floating_point(batch['image']), "Images should be floating point tensors")
+			self.assertTrue(torch.is_floating_point(batch['agent_pos']), "Agent positions should be floating point tensors")
+			self.assertTrue(torch.is_floating_point(batch['action']), "Actions should be floating point tensors")
+			
+		except Exception as e:
+			self.fail(f"Failed to get batch from dataloader with error: {e}")
+			import traceback
+			traceback.print_exc()
+
+	def test_dataset_sequence_structure(self):
+		"""
+		Tests that the PolicyDataset maintains the correct temporal structure:
+		- observations: [t-1, t]
+		- actions predicted: [t-1, t+WINDOW_SIZE-2]
+		- actions executed: [t, t+WINDOW_SIZE//2-1]
+		"""
+		# Initialize dataset with specific horizons
+		pred_horizon = 16  # total prediction horizon
+		obs_horizon = 2    # observation horizon (t-1, t)
+		action_horizon = 8 # executed action horizon
+		
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=pred_horizon,
+			obs_horizon=obs_horizon,
+			action_horizon=action_horizon
+		)
+		
+		# Get a sample
+		sample = dataset[0]
+		
+		# Check observation structure
+		self.assertEqual(sample["image"].shape, (obs_horizon, 3, IMG_RES, IMG_RES),
+						f"Expected image shape (obs_horizon, 3, IMG_RES, IMG_RES), got {sample['image'].shape}")
+		
+		# Check agent position structure - flattened for model input (2 observations × 2 dimensions)
+		self.assertEqual(sample["agent_pos"].shape, (obs_horizon * 2,),
+						f"Expected agent_pos shape (obs_horizon*2,), got {sample['agent_pos'].shape}")
+		
+		# Check action structure - full prediction horizon
+		self.assertEqual(sample["action"].shape, (pred_horizon, ACTION_DIM),
+						f"Expected action shape (pred_horizon, ACTION_DIM), got {sample['action'].shape}")
+		
+		# Now let's test with pred_horizon matching WINDOW_SIZE from config
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=WINDOW_SIZE,
+			obs_horizon=obs_horizon,
+			action_horizon=WINDOW_SIZE//2
+		)
+		
+		# Get a sample
+		sample = dataset[0]
+		
+		# Verify observations (t-1, t)
+		self.assertEqual(sample["image"].shape, (obs_horizon, 3, IMG_RES, IMG_RES))
+		
+		# Verify actions predicted [t-1, WINDOW_SIZE-1]
+		self.assertEqual(sample["action"].shape, (WINDOW_SIZE, ACTION_DIM))
+
+	def test_temporal_structure_alignment(self):
+		"""
+			Tests that the PolicyDataset maintains the correct temporal structure:
+			- observations: [t-1, t]
+			- actions predicted: [t-1, t+WINDOW_SIZE-2]
+			- actions executed: [t, t+WINDOW_SIZE//2-1]
+			"""
+		# Initialize dataset with specific horizons
+		pred_horizon = 16  # total prediction horizon
+		obs_horizon = 2    # observation horizon (t-1, t)
+		action_horizon = 8 # executed action horizon
+		
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=pred_horizon,
+			obs_horizon=obs_horizon,
+			action_horizon=action_horizon
+		)
+		
+		# Get a sample
+		sample = dataset[0]
+		
+		# Check observation structure
+		self.assertEqual(sample["image"].shape, (obs_horizon, 3, IMG_RES, IMG_RES),
+						f"Expected image shape (obs_horizon, 3, IMG_RES, IMG_RES), got {sample['image'].shape}")
+		
+		# Check agent position structure - flattened for model input (2 observations × 2 dimensions)
+		self.assertEqual(sample["agent_pos"].shape, (obs_horizon * 2,),
+						f"Expected agent_pos shape (obs_horizon*2,), got {sample['agent_pos'].shape}")
+		
+		# Check action structure - full prediction horizon
+		self.assertEqual(sample["action"].shape, (pred_horizon, ACTION_DIM),
+						f"Expected action shape (pred_horizon, ACTION_DIM), got {sample['action'].shape}")
+		
+		# Now let's test with pred_horizon matching WINDOW_SIZE from config
+		dataset = PolicyDataset(
+			dataset_type="lerobot",
+			data_dir=TRAINING_DATA_DIR,
+			pred_horizon=WINDOW_SIZE,
+			obs_horizon=obs_horizon,
+			action_horizon=WINDOW_SIZE//2
+		)
+		
+		# Get a sample
+		sample = dataset[0]
+		
+		# Verify observations (t-1, t)
+		self.assertEqual(sample["image"].shape, (obs_horizon, 3, IMG_RES, IMG_RES))
+		
+		# Verify actions predicted [t-1, WINDOW_SIZE-1]
+		self.assertEqual(sample["action"].shape, (WINDOW_SIZE, ACTION_DIM))
+
+	def test_temporal_alignment_with_raw_data(self):
+		"""
+		Verify temporal alignment by comparing against a real episode from the LeRobot dataset.
+		This ensures that observations [t-1, t], actions predicted [t-1, t+pred_horizon-2],
+		and actions executed [t, t+action_horizon-1] are correctly aligned.
+		"""
+		try:
+			from datasets import load_dataset
+			from tabulate import tabulate
+			
+			# Specify our temporal horizons
+			obs_horizon = 2        # Observations: [t-1, t]
+			action_horizon = 8     # Actions executed: [t, t+7]
+			pred_horizon = 16      # Actions predicted: [t-1, t+14]
+			
+			# Load raw data (limited sample for testing)
+			print("\nLoading raw LeRobot data for temporal alignment test...")
+			raw_dataset = load_dataset("lerobot/pusht_image", split="train[:100]")
+			
+			# Find episodes and select one with sufficient frames
+			episodes = {}
+			for sample in raw_dataset:
+				ep = sample["episode_index"]
+				episodes.setdefault(ep, []).append(sample)
+			
+			# Find an episode with enough frames for our horizons
+			test_episode = None
+			for ep, frames in episodes.items():
+				if len(frames) >= pred_horizon + 2:  # Need extra frames to ensure a valid window
+					test_episode = ep
+					break
+			
+			self.assertIsNotNone(test_episode, "Could not find episode with sufficient frames")
+			
+			# Sort frames by index to ensure temporal order
+			ep_frames = sorted([f for f in raw_dataset if f["episode_index"] == test_episode],
+							  key=lambda x: x["frame_index"])
+			
+			print(f"Testing with episode {test_episode}, which has {len(ep_frames)} frames")
+			
+			# Create dataset with our specific horizons
+			dataset = PolicyDataset(
+				dataset_type="lerobot",
+				data_dir=TRAINING_DATA_DIR,
+				pred_horizon=pred_horizon,
+				action_horizon=action_horizon,
+				obs_horizon=obs_horizon
+			)
+			
+			# Now we need to find samples in our dataset that use this episode
+			# We'll check for matching state/action values to identify them
+			
+			# First, build a reference sample from the raw data at a specific position
+			position = 5  # Choose a position with enough context (not at the start)
+			
+			if position >= len(ep_frames) - pred_horizon:
+				position = len(ep_frames) - pred_horizon - 1
+				
+			print(f"Creating reference sample at position {position} in episode {test_episode}")
+			
+			# Reference observations [t-1, t]
+			ref_obs = [
+				ep_frames[position-1]["observation.state"],
+				ep_frames[position]["observation.state"]
+			]
+			ref_obs_flat = np.concatenate(ref_obs)
+			ref_obs_tensor = torch.tensor(ref_obs_flat, dtype=torch.float32)
+			normalized_ref_obs = dataset.normalize.normalize_condition(ref_obs_tensor)
+			
+			# Reference actions [t-1, t+pred_horizon-2]
+			ref_actions = []
+			for i in range(position-1, position+pred_horizon-1):
+				if i < len(ep_frames):
+					ref_actions.append(ep_frames[i]["action"])
+				else:
+					# Pad with last action if needed
+					ref_actions.append(ep_frames[-1]["action"])
+			
+			ref_actions_tensor = torch.tensor(ref_actions, dtype=torch.float32)
+			normalized_ref_actions = dataset.normalize.normalize_action(ref_actions_tensor)
+			
+			# Extract the executed portion [t, t+action_horizon-1]
+			ref_executed = ref_actions_tensor[1:1+action_horizon]
+			
+			# Now search for a matching sample in the dataset
+			found_match = False
+			matching_idx = -1
+			match_similarity = float('inf')
+			
+			# Try more samples to increase chance of finding a match
+			num_samples = min(1000, len(dataset))
+			
+			print(f"Searching through {num_samples} samples for a match...")
+			for idx in range(num_samples):
+				try:
+					sample = dataset[idx]
+					sample_obs = sample["agent_pos"]
+					sample_actions = sample["action"]
+					
+					# Compute similarity between this sample and our reference
+					obs_similarity = torch.norm(sample_obs - normalized_ref_obs)
+					
+					if obs_similarity < 0.1:
+						# We found a close observation match, now check actions
+						action_similarity = torch.norm(sample_actions - normalized_ref_actions)
+						total_similarity = obs_similarity + 0.1 * action_similarity
+						
+						if total_similarity < match_similarity:
+							match_similarity = total_similarity
+							matching_idx = idx
+							found_match = True
+							
+							# If we have a very good match, break early
+							if total_similarity < 0.05:
+								break
+						
+				except Exception as e:
+					continue
+			
+			if found_match:
+				print(f"Found matching sample at index {matching_idx} with similarity {match_similarity:.4f}")
+				
+				# Get the matched sample
+				matched_sample = dataset[matching_idx]
+				
+				# Get the indices used to create this sample
+				indices = dataset.indices[matching_idx]
+				buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx = indices
+				
+				print(f"Buffer indices: {buffer_start_idx}:{buffer_end_idx}, Sample placement: {sample_start_idx}:{sample_end_idx}")
+				
+				# Test 1: Verify observations match the expected frames
+				# The observation at t-1 and t should match our reference
+				sample_obs = matched_sample["agent_pos"]
+				self.assertLess(torch.norm(sample_obs - normalized_ref_obs), 0.2,
+							  "Observations should closely match reference")
+				
+				# Test 2: Verify the predicted action sequence matches expected raw data
+				# The entire action sequence should match our reference actions
+				sample_actions = matched_sample["action"]
+				self.assertEqual(sample_actions.shape, normalized_ref_actions.shape,
+							   "Action sequence shape should match reference")
+				
+				# Allow some tolerance since there might be minor differences due to
+				# normalization or different episodes with similar patterns
+				action_diff = torch.norm(sample_actions - normalized_ref_actions)
+				self.assertLessEqual(action_diff / pred_horizon, 0.5,
+								   f"Per-step action difference ({action_diff/pred_horizon:.4f}) exceeds tolerance")
+				
+				# Test 3: Verify execution window has the expected actions
+				# The executed portion [t:t+action_horizon] should match our reference executed actions
+				executed_actions = sample_actions[1:1+action_horizon]
+				executed_ref = normalized_ref_actions[1:1+action_horizon]
+				self.assertEqual(executed_actions.shape, executed_ref.shape,
+							   f"Executed action shape should be {executed_ref.shape}")
+				
+				# Visual verification - print the temporal structure
+				print("\n=== Temporal Structure Verification ===")
+				print("Observations [t-1, t]:")
+				for i, obs in enumerate(ref_obs):
+					print(f"  t{i-1}: {obs}")
+				
+				print("\nPredicted Actions [t-1, t+14]:")
+				for i, act in enumerate(ref_actions[:5]):
+					print(f"  t{i-1}: {act}")
+				print("  ...")
+				for i, act in enumerate(ref_actions[-3:]):
+					print(f"  t{i+pred_horizon-4}: {act}")
+				
+				print("\nExecuted Actions [t, t+7]:")
+				for i, act in enumerate(ref_executed[:3]):
+					print(f"  t{i}: {act}")
+				print("  ...")
+				for i, act in enumerate(ref_executed[-3:]):
+					print(f"  t{i+action_horizon-3}: {act}")
+				
+				# Create visual diagram of temporal structure
+				print("\nTemporal Structure Diagram:")
+				print("Time:  t-1   t    t+1  ...  t+7  ...  t+14")
+				print("      +-----+-----+-----+---+-----+---+-----+")
+				print("Obs:  |  o  |  o  |     |   |     |   |     |")
+				print("      +-----+-----+-----+---+-----+---+-----+")
+				print("Exec: |     |  a  |  a  |...|  a  |   |     |")
+				print("      +-----+-----+-----+---+-----+---+-----+")
+				print("Pred: |  p  |  p  |  p  |...|  p  |...|  p  |")
+				print("      +-----+-----+-----+---+-----+---+-----+")
+				
+				 # Enhanced comparison display section
+				print("\n═════════════════════════════════════════════")
+				print("  TEMPORAL ALIGNMENT VERIFICATION DETAILS  ")
+				print("═════════════════════════════════════════════\n")
+				
+				# 1. Observation Comparison
+				print("OBSERVATION COMPARISON [t-1, t]:")
+				# Unnormalize the sample observation to match raw data scale
+				sample_obs_tensor = matched_sample["agent_pos"].reshape(2, 2)  # reshape to (obs_horizon, dim)
+				unnorm_sample_obs = dataset.normalize.unnormalize_condition(sample_obs_tensor.flatten())
+				unnorm_sample_obs = unnorm_sample_obs.reshape(2, 2)
+				
+				# Create table headers and data for observation comparison
+				obs_headers = ["Timestep", "Raw X", "Raw Y", "Processed X", "Processed Y", "Diff X", "Diff Y"]
+				obs_data = []
+				for t_idx in range(obs_horizon):
+					raw_xy = torch.tensor(ref_obs[t_idx])
+					proc_xy = unnorm_sample_obs[t_idx]
+					diff_xy = raw_xy - proc_xy
+					obs_data.append([
+						f"t{t_idx-1}", 
+						f"{raw_xy[0]:.4f}", f"{raw_xy[1]:.4f}",
+						f"{proc_xy[0]:.4f}", f"{proc_xy[1]:.4f}",
+						f"{diff_xy[0]:.4f}", f"{diff_xy[1]:.4f}"
+					])
+				
+				print(tabulate(obs_data, headers=obs_headers, tablefmt="pretty"))
+				print()
+				
+				# 2. Action Sequence Comparison (show a subset for clarity)
+				print("ACTION SEQUENCE COMPARISON [t-1, t+14]:")
+				
+				# Unnormalize the sample actions for comparison
+				unnorm_sample_actions = dataset.normalize.unnormalize_action(matched_sample["action"])
+				
+				# Create action comparison table with subset of timesteps
+				action_headers = ["Timestep", "Raw X", "Raw Y", "Processed X", "Processed Y", "Diff X", "Diff Y"]
+				action_data = []
+				
+				# Show first few and last few timesteps (avoid too much data)
+				display_indices = list(range(0, 3)) + list(range(pred_horizon-3, pred_horizon))
+				
+				for i in display_indices:
+					t_label = f"t{i-1}"  # t-1, t, t+1, etc.
+					
+					# Handle index bounds for raw actions
+					raw_xy = ref_actions_tensor[i] if i < len(ref_actions_tensor) else ref_actions_tensor[-1]
+					proc_xy = unnorm_sample_actions[i]
+					diff_xy = raw_xy - proc_xy
+					
+					action_data.append([
+						t_label,
+						f"{raw_xy[0]:.4f}", f"{raw_xy[1]:.4f}",
+						f"{proc_xy[0]:.4f}", f"{proc_xy[1]:.4f}",
+						f"{diff_xy[0]:.4f}", f"{diff_xy[1]:.4f}"
+					])
+				
+				print(tabulate(action_data, headers=action_headers, tablefmt="pretty"))
+				print()
+				
+				# 3. Execution Window Comparison
+				print("EXECUTION WINDOW COMPARISON [t, t+7]:")
+				
+				# Extract executed actions
+				executed_actions = unnorm_sample_actions[1:1+action_horizon]
+				ref_executed = ref_actions_tensor[1:1+action_horizon]
+				
+				exec_headers = ["Timestep", "Raw X", "Raw Y", "Processed X", "Processed Y", "Diff X", "Diff Y"]
+				exec_data = []
+				
+				# Show first few and last few timesteps of execution window
+				exec_indices = list(range(0, 2)) + list(range(action_horizon-2, action_horizon))
+				
+				for i in exec_indices:
+					t_label = f"t+{i}"  # t, t+1, t+2, etc.
+					raw_xy = ref_executed[i]
+					proc_xy = executed_actions[i]
+					diff_xy = raw_xy - proc_xy
+					
+					exec_data.append([
+						t_label,
+						f"{raw_xy[0]:.4f}", f"{raw_xy[1]:.4f}",
+						f"{proc_xy[0]:.4f}", f"{proc_xy[1]:.4f}",
+						f"{diff_xy[0]:.4f}", f"{diff_xy[1]:.4f}"
+					])
+				
+				print(tabulate(exec_data, headers=exec_headers, tablefmt="pretty"))
+				print()
+				
+				# 4. Summary Statistics
+				print("SUMMARY STATISTICS:")
+				obs_error = torch.norm(torch.tensor(ref_obs).flatten() - unnorm_sample_obs.flatten())
+				action_error = torch.norm(ref_actions_tensor - unnorm_sample_actions)
+				exec_error = torch.norm(ref_executed - executed_actions)
+				
+				stats_headers = ["Metric", "Value", "Per-Element", "Interpretation"]
+				stats_data = [
+					["Observation Error", f"{obs_error:.4f}", f"{obs_error/obs_horizon/2:.4f}", 
+					 "Excellent" if obs_error/obs_horizon/2 < 0.01 else 
+					 "Good" if obs_error/obs_horizon/2 < 0.05 else "Fair"],
+					["Action Sequence Error", f"{action_error:.4f}", f"{action_error/pred_horizon/2:.4f}", 
+					 "Excellent" if action_error/pred_horizon/2 < 0.01 else 
+					 "Good" if action_error/pred_horizon/2 < 0.05 else "Fair"],
+					["Execution Window Error", f"{exec_error:.4f}", f"{exec_error/action_horizon/2:.4f}", 
+					 "Excellent" if exec_error/action_horizon/2 < 0.01 else 
+					 "Good" if exec_error/action_horizon/2 < 0.05 else "Fair"]
+				]
+				
+				print(tabulate(stats_data, headers=stats_headers, tablefmt="pretty"))
+				print()
+				
+				# 5. Enhanced visual diagram of temporal structure
+				print("\nTEMPORAL STRUCTURE DIAGRAM:")
+				print("Time:  t-1   t    t+1  ...  t+7  ...  t+14")
+				print("      ┌─────┬─────┬─────┬───┬─────┬───┬─────┐")
+				print("Obs:  │  o  │  o  │     │   │     │   │     │")
+				print("      ├─────┼─────┼─────┼───┼─────┼───┼─────┤")
+				print("Exec: │     │  a  │  a  │...│  a  │   │     │")
+				print("      ├─────┼─────┼─────┼───┼─────┼───┼─────┤")
+				print("Pred: │  p  │  p  │  p  │...│  p  │...│  p  │")
+				print("      └─────┴─────┴─────┴───┴─────┴───┴─────┘")
+				
+				# 6. Enhanced visualization - trajectory comparison
+				try:
+					# Create a nicer trajectory comparison plot
+					plt.figure(figsize=(12, 8))
+					
+					# Create a 2x2 grid of plots
+					plt.subplot(2, 2, 1)
+					# Plot raw unnormalized trajectories
+					plt.title('Raw vs Processed Full Trajectories')
+					plt.plot(ref_actions_tensor[:, 0].numpy(), ref_actions_tensor[:, 1].numpy(), 
+							'r-', label='Raw Data')
+					plt.plot(unnorm_sample_actions[:, 0].numpy(), unnorm_sample_actions[:, 1].numpy(), 
+							'b--', label='Processed Data')
+					plt.scatter(ref_actions_tensor[0, 0], ref_actions_tensor[0, 1], 
+							   c='green', s=100, marker='o', label='Start')
+					plt.scatter(ref_actions_tensor[-1, 0], ref_actions_tensor[-1, 1], 
+							   c='red', s=100, marker='x', label='End')
+					plt.xlabel('X Position')
+					plt.ylabel('Y Position')
+					plt.grid(True)
+					plt.legend()
+					
+					# Plot executed trajectory portion
+					plt.subplot(2, 2, 2)
+					plt.title('Execution Window [t, t+7]')
+					plt.plot(ref_executed[:, 0].numpy(), ref_executed[:, 1].numpy(), 
+							'r-', label='Raw Executed')
+					plt.plot(executed_actions[:, 0].numpy(), executed_actions[:, 1].numpy(), 
+							'b--', label='Processed Executed')
+					plt.scatter(ref_executed[0, 0], ref_executed[0, 1], 
+							   c='green', s=100, marker='o', label='Start')
+					plt.scatter(ref_executed[-1, 0], ref_executed[-1, 1], 
+							   c='red', s=100, marker='x', label='End')
+					plt.xlabel('X Position')
+					plt.ylabel('Y Position')
+					plt.grid(True)
+					plt.legend()
+					
+					# Plot the position differences over time
+					plt.subplot(2, 2, 3)
+					plt.title('Position Difference Over Time')
+					time_steps = range(pred_horizon)
+					plt.plot(time_steps, abs(ref_actions_tensor[:, 0] - unnorm_sample_actions[:, 0]).numpy(), 
+							'r-', label='X Difference')
+					plt.plot(time_steps, abs(ref_actions_tensor[:, 1] - unnorm_sample_actions[:, 1]).numpy(), 
+							'b-', label='Y Difference')
+					plt.axvspan(1, action_horizon, color='green', alpha=0.2, label='Execution Window')
+					plt.xlabel('Time Step')
+					plt.ylabel('Absolute Difference')
+					plt.grid(True)
+					plt.legend()
+					
+					# Plot the observations
+					plt.subplot(2, 2, 4)
+					plt.title('Observation Positions')
+					plt.scatter([ref_obs[0][0], ref_obs[1][0]], [ref_obs[0][1], ref_obs[1][1]], 
+							   c=['blue', 'red'], s=100, marker='o', label='Raw Obs')
+					plt.scatter([unnorm_sample_obs[0][0], unnorm_sample_obs[0][1]], 
+							   [unnorm_sample_obs[1][0], unnorm_sample_obs[1][1]], 
+							   c=['blue', 'red'], s=100, marker='x', label='Processed Obs')
+					plt.xlabel('X Position')
+					plt.ylabel('Y Position')
+					plt.grid(True)
+					plt.legend()
+					
+					plt.tight_layout()
+					plt.show(block=False)
+					plt.pause(0.1)  # Small pause to render
+				except Exception as e:
+					print(f"Enhanced visualization error: {e}")
+					import traceback
+					traceback.print_exc()
+				
+			else:
+				self.fail("Could not find a matching sample in the dataset")
+				
+		except Exception as e:
+			import traceback
+			traceback.print_exc()
+			self.fail(f"Failed temporal alignment test with error: {e}")
 
 class TestPolicyInference(unittest.TestCase):
 	"""Tests for the DiffusionPolicyInference module."""
@@ -452,7 +1039,7 @@ class TestPolicyInference(unittest.TestCase):
 		self.model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE)
 		self.inference = DiffusionPolicyInference(model_path="")
 		self.inference.model = self.model
-		
+
 	def test_sample_action(self):
 		state = torch.randn(1, 4)
 		image = [torch.randn(1, 3, IMG_RES, IMG_RES), torch.randn(1, 3, IMG_RES, IMG_RES)]
@@ -465,7 +1052,7 @@ class TestPolicyInference(unittest.TestCase):
 		self.assertTrue(torch.all(action[:, 0] <= SCREEN_WIDTH - 1))
 		self.assertTrue(torch.all(action[:, 1] >= 0))
 		self.assertTrue(torch.all(action[:, 1] <= SCREEN_HEIGHT - 1))
-		
+
 	def test_deterministic_sampling(self):
 		torch.manual_seed(42)
 		state = torch.randn(1, 4)
@@ -475,7 +1062,7 @@ class TestPolicyInference(unittest.TestCase):
 		torch.manual_seed(42)
 		action2 = self.inference.generate_action_sequence(state, image, num_ddim_steps=10)
 		self.assertTrue(torch.allclose(action1, action2))
-		
+
 	def test_ddim_sampling_time_steps(self):
 		state = torch.randn(1, 4)
 		image = [torch.randn(1, 3, IMG_RES, IMG_RES), torch.randn(1, 3, IMG_RES, IMG_RES)]
@@ -483,6 +1070,57 @@ class TestPolicyInference(unittest.TestCase):
 		self.assertEqual(action.shape, (WINDOW_SIZE - 1, ACTION_DIM))
 		action = self.inference.generate_action_sequence(state, image, num_ddim_steps=20)
 		self.assertEqual(action.shape, (WINDOW_SIZE - 1, ACTION_DIM))
+
+	def test_policy_sequence_generation(self):
+		"""Tests that the DiffusionPolicy correctly generates action sequences with the right temporal structure."""
+		# Create a model with specific window size
+		model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE)
+		inference = DiffusionPolicyInference(model_path="")
+		inference.model = model
+		
+		# Create synthetic inputs
+		state = torch.randn(1, 4)  # [batch, obs_horizon*state_dim]
+		image = [torch.randn(1, 3, IMG_RES, IMG_RES), torch.randn(1, 3, IMG_RES, IMG_RES)]
+		
+		# Generate action sequence
+		action = inference.generate_action_sequence(state, image, num_ddim_steps=10)
+		
+		# Expect a tensor of shape (WINDOW_SIZE-1, ACTION_DIM)
+		# Since we're excluding the t-1 action (which is part of the condition)
+		# Note that on execution, we only use WINDOW_SIZE // 2 actions.
+		self.assertEqual(action.shape, (WINDOW_SIZE-1, ACTION_DIM),
+						 f"Expected action shape (WINDOW_SIZE-1, ACTION_DIM), got {action.shape}")
+
+	def test_action_execution_window(self):
+		"""
+		Tests that the generated action sequence can be properly windowed
+		to extract the executed portion (t to t+action_horizon-1).
+		"""
+		model = DiffusionPolicy(ACTION_DIM, CONDITION_DIM, time_embed_dim=128, window_size=WINDOW_SIZE)
+		inference = DiffusionPolicyInference(model_path="")
+		inference.model = model
+		
+		# Create synthetic inputs
+		state = torch.randn(1, 4)  # [batch, obs_horizon*state_dim]
+		image = [torch.randn(1, 3, IMG_RES, IMG_RES), torch.randn(1, 3, IMG_RES, IMG_RES)]
+		
+		# Generate action sequence
+		full_action = inference.generate_action_sequence(state, image, num_ddim_steps=10)
+		
+		# Extract the executed portion [t, t+action_horizon-1]
+		# In the full sequence [t-1, t+WINDOW_SIZE-2], executed starts at index 1
+		action_horizon = WINDOW_SIZE//2
+		executed_actions = full_action[1:1+action_horizon]
+		
+		# Verify shape of executed actions
+		self.assertEqual(executed_actions.shape, (action_horizon, ACTION_DIM),
+						 f"Expected executed actions shape ({action_horizon}, {ACTION_DIM}), got {executed_actions.shape}")
+		
+		# Verify executed actions stay within bounds
+		self.assertTrue(torch.all(executed_actions[:, 0] >= 0))
+		self.assertTrue(torch.all(executed_actions[:, 0] <= SCREEN_WIDTH - 1))
+		self.assertTrue(torch.all(executed_actions[:, 1] >= 0))
+		self.assertTrue(torch.all(executed_actions[:, 1] <= SCREEN_HEIGHT - 1))
 
 class TestDiffusionProcess(unittest.TestCase):
 	"""Tests for the diffusion process (forward and reverse)."""
@@ -498,9 +1136,9 @@ class TestDiffusionProcess(unittest.TestCase):
 		noise = torch.randn_like(x_0)
 		x_t = torch.sqrt(alpha_bar) * x_0 + torch.sqrt(1 - alpha_bar) * noise
 		self.assertEqual(x_t.shape, x_0.shape)
-		snr_0 = torch.mean(torch.abs(torch.sqrt(alpha_bar[0]) * x_0[0]) / 
+		snr_0 = torch.mean(torch.abs(torch.sqrt(alpha_bar[0]) * x_0[0]) /
 						  torch.abs(torch.sqrt(1 - alpha_bar[0]) * noise[0]))
-		snr_1 = torch.mean(torch.abs(torch.sqrt(alpha_bar[1]) * x_0[1]) / 
+		snr_1 = torch.mean(torch.abs(torch.sqrt(alpha_bar[1]) * x_0[1]) /
 						  torch.abs(torch.sqrt(1 - alpha_bar[1]) * noise[1]))
 		self.assertLess(snr_0, snr_1)
 
