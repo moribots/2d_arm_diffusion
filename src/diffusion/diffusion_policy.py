@@ -165,6 +165,9 @@ class FiLM(nn.Module):
 	This module takes a conditioning vector and outputs two modulation parameters per channel
 	(scale and bias), which are applied multiplicatively and additively, respectively, to the input feature map.
 
+	This conditioning technique adaptively modifies the feature maps based on conditioning information,
+	This is critical to integrating varied sources of information (e.g., diffusion step and global state) into the network.
+
 	Args:
 		channels (int): Number of channels in the input feature map.
 		cond_dim (int): Dimensionality of the conditioning vector.
@@ -207,7 +210,13 @@ class ConditionalResidualBlock1D(nn.Module):
 	Diagram:
 		 x ──► Conv1d ─► GN ─► Mish ─► FiLM ─► Conv1d ─► GN ─► Mish
 		  │                                          │
-		  └───────────── [1x1 Projection] ───────────► + 
+		  └───────────── [1x1 Projection] ───────────► +
+
+	The Conv1d layers transform feature dimensions from in_channels to out_channels while 
+	maintaining the temporal dimension. Additionally, it maintains the temporal structure of
+	the input as well as its order (e.g the relative relevance of each input)
+	The FiLM module injects contextual information (e.g diffusion time step).
+	The residual connection helps information flow and stabilizes training by adding the input to the output.
 
 	Args:
 		in_channels (int): Number of input channels.
