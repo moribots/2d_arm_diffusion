@@ -66,8 +66,6 @@ training_data/
 *.pth
 *.parquet
 *.avi
-*.mp4
-*.gif
 wandb/
 videos/
 action_plots/
