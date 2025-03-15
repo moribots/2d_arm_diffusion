@@ -180,6 +180,9 @@ class PolicyDataset(Dataset):
 			obs_horizon (int): Number of timesteps to use as the observation (from the beginning of the sequence).
 			action_horizon (int): Horizon for action data; used for padding at the end.
 		"""
+		 # Store dataset_type as an instance attribute
+		self.dataset_type = dataset_type
+		
 		# Normalizer.
 		self.normalize = Normalize.compute_from_limits()
 		# Lists to accumulate contiguous data across all episodes.

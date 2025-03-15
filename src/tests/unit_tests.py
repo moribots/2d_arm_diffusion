@@ -19,7 +19,8 @@ from src.config import *
 from src.utils.diffusion_utils import get_beta_schedule, compute_alphas
 from src.diffusion.diffusion_policy import DiffusionPolicy, UNet1D, ConditionalResidualBlock1D, FiLM
 from src.diffusion.policy_inference import DiffusionPolicyInference
-from src.diffusion.train_diffusion import PolicyDataset, get_chunk_time_encoding
+from src.diffusion.train_diffusion import PolicyDataset
+from src.utils.validation_utils import *
 from src.utils.normalize import Normalize
 from src.datasets.policy_dataset import PolicyDataset
 from src.utils.utils import *

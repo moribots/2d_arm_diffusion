@@ -88,7 +88,7 @@ NORM_STATS_FILENAME = "normalization_stats.parquet"
 MODEL_CHECKPOINT_FILENAME = "diffusion_policy.pth"
 
 # Diffusion loss masking configuration.
-DO_MASK_LOSS_FOR_PADDING = True
+DO_MASK_LOSS_FOR_PADDING = False
 DO_SQRT_ALPHA_BAR_WEIGHTING = False
 
 # Dataset and environment type settings.
