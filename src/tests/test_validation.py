@@ -11,7 +11,7 @@ import unittest
 import torch
 import torch.nn as nn
 import numpy as np
-from config import *
+from src.config import *
 from src.diffusion.diffusion_policy import DiffusionPolicy
 from src.diffusion.train_diffusion import validate_policy
 from src.utils.video_utils import save_video  # Import the new video utility
@@ -80,7 +80,7 @@ class TestValidation(unittest.TestCase):
 		os.makedirs(os.path.join(OUTPUT_DIR, "lerobot"), exist_ok=True)
 		
 		# Create a dummy normalization stats file if it doesn't exist
-		from normalize import Normalize
+		from src.utils.normalize import Normalize
 		norm_path = OUTPUT_DIR + "lerobot/normalization_stats.parquet"
 		if not os.path.exists(norm_path):
 			normalize = Normalize.compute_from_limits()
@@ -177,7 +177,6 @@ class TestValidation(unittest.TestCase):
 					model = DiffusionPolicy(
 						action_dim=int(ACTION_DIM),
 						condition_dim=int(CONDITION_DIM),
-						time_embed_dim=128,
 						window_size=int(WINDOW_SIZE)
 					).to(self.device)
 					
