@@ -202,9 +202,6 @@ def validate_policy(model, device, save_locally=False, local_save_path=None):
 		save_locally=save_locally  # Only save locally if explicitly requested
 	)
 
-	# Compare with training data sample
-	compare_to_training_data(model, device)
-
 	# Return the appropriate video path based on what was requested
 	if save_locally and 'local_video_path' in locals() and local_video_path:
 		return total_reward, local_video_path, action_plot_path
