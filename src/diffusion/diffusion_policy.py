@@ -257,7 +257,7 @@ class ConditionalResidualBlock1D(nn.Module):
 		out = self.conv1(x)
 		out = self.gn1(out)
 		out = self.act1(out)
-		# Apply FiLM modulation.
+		# Apply FiLM modulation to incorporate conditioning information.
 		out = self.film(out, cond)
 		# Second convolutional block.
 		out = self.conv2(out)
