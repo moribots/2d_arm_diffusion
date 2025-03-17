@@ -7,6 +7,9 @@ This project is my independent foray into visuomotor policies, starting with dif
 - Exportable into ready-to-use `.ipynb` format for cloud training.
 - Toy problem extensions (e.g goal-guided policy, and/or 2D arm joint commands in place of EE targets).
 
+
+[My notes on Visuomotor Diffusion Policies](Diffusion_Policy.pdf).
+
 ## Example Training/Validation Run
 
 This is on the `Lerobot` dataset. I plan to do custom training at some point, but I started with a trustworthy dataset to validate my policy.
@@ -18,6 +21,7 @@ The most crucial part of this process was unit testing. My tests helped me ensur
 ```bash
 python -m src.tests.unit_tests
 ```
+
 
 ## Installation
 
