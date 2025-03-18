@@ -3,7 +3,7 @@
 import torch
 import pygame
 from einops import rearrange
-from config import M_T, T_COLOR, LINEAR_DAMPING, ANGULAR_DAMPING
+from src.config import M_T, T_COLOR, LINEAR_DAMPING, ANGULAR_DAMPING
 
 def polygon_moi(vertices: torch.Tensor, mass: float) -> float:
 	"""

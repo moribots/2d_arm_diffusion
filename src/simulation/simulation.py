@@ -9,12 +9,13 @@ import argparse
 import pygame
 import os
 import time
+import math
 import torch
-from config import *
-from utils import get_training_data_dir, recompute_normalization_stats
-from arm import ArmNR
-from object import Object
-from policy_inference import DiffusionPolicyInference
+from src.config import *
+from src.utils.utils import get_training_data_dir, recompute_normalization_stats, random_t_pose, compute_ee_velocity
+from src.simulation.arm import ArmNR
+from src.simulation.object import Object
+from src.diffusion.policy_inference import DiffusionPolicyInference
 from einops import rearrange
 from PIL import Image
 import shutil
@@ -470,7 +471,6 @@ def create_simulation(mode: str, env_type: str):
 	"""
 	Factory function to create a simulation instance based on the environment type.
 	"""
-	from simulation import LeRobotSimulation, CustomSimulation  # Local import.
 	if env_type == "lerobot":
 		return LeRobotSimulation(mode=mode)
 	else:
